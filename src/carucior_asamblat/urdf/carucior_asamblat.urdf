@@ -1,0 +1,451 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot name="carucior_asamblat">
+
+  <!-- ===================== BASE ===================== -->
+  <link
+    name="base_link">
+    <inertial>
+      <origin xyz="0.538 -0.580 0.830" rpy="0 0 0"/>
+      <mass value="63.3293776271428"/>
+      <inertia ixx="14.8168" ixy="0" ixz="0"
+               iyy="7.7277"  iyz="0"
+               izz="11.4307"/>
+    </inertial>
+
+
+
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://carucior_asamblat/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.776470588235294 0.756862745098039 0.737254901960784 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://carucior_asamblat/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="roata_fata_stanga">
+    <inertial>
+      <origin
+        xyz="-9.11939412873153E-11 3.62448737689647E-10 -0.029046440432834"
+        rpy="0 0 0" />
+      <mass
+        value="0.266614745081332" />
+      <inertia
+        ixx="8.05443064198349E-05"
+        ixy="-9.52176841062871E-16"
+        ixz="-1.1689138977038E-12"
+        iyy="8.05443064182605E-05"
+        iyz="-3.10186380160039E-13"
+        izz="9.3181151539936E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://carucior_asamblat/meshes/roata_fata_stanga.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://carucior_asamblat/meshes/roata_fata_stanga.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="left_front_wheel"
+    type="continuous">
+    <origin
+      xyz="0.84131 -1.0876 0.36142"
+      rpy="-1.5708 0.80851 1.5708" />
+    <parent
+      link="base_link" />
+    <child
+      link="roata_fata_stanga" />
+    <axis
+      xyz="0 0 1" />
+  </joint>
+  <link
+    name="roata_fata_dreapta">
+    <inertial>
+      <origin
+        xyz="1.07050701636524E-10 3.58637231023806E-10 0.0289535595345275"
+        rpy="0 0 0" />
+      <mass
+        value="0.266614744778848" />
+      <inertia
+        ixx="8.05443061904032E-05"
+        ixy="-1.05885217044008E-15"
+        ixz="1.16525439589601E-12"
+        iyy="8.05443061892018E-05"
+        iyz="-3.41426218011546E-13"
+        izz="9.31811510946259E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://carucior_asamblat/meshes/roata_fata_dreapta.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://carucior_asamblat/meshes/roata_fata_dreapta.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="right_front_wheel"
+    type="continuous">
+    <origin
+      xyz="0.17655 -1.0876 0.36142"
+      rpy="1.5708 -0.63666 1.5708" />
+    <parent
+      link="base_link" />
+    <child
+      link="roata_fata_dreapta" />
+    <axis
+      xyz="0 0 -1" />
+  </joint>
+  <link
+    name="roata_spate_dreapta">
+    <inertial>
+      <origin
+        xyz="1.07082620548482E-10 3.61238650103957E-10 0.0289535595348932"
+        rpy="0 0 0" />
+      <mass
+        value="0.266614744779289" />
+      <inertia
+        ixx="8.05443061913611E-05"
+        ixy="-1.04216392731327E-15"
+        ixz="1.17188274724468E-12"
+        iyy="8.05443061886055E-05"
+        iyz="-3.37924085017717E-13"
+        izz="9.31811510946647E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://carucior_asamblat/meshes/roata_spate_dreapta.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://carucior_asamblat/meshes/roata_spate_dreapta.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="right_back_wheel"
+    type="continuous">
+    <origin
+      xyz="0.17655 -0.23756 0.36142"
+      rpy="1.5708 -1.447 1.5708" />
+    <parent
+      link="base_link" />
+    <child
+      link="roata_spate_dreapta" />
+    <axis
+      xyz="0 0 -1" />
+  </joint>
+  <link
+    name="roata_spate_stanga">
+    <inertial>
+      <origin
+        xyz="-1.10919662343889E-10 3.64174579381427E-10 -0.0290464404327475"
+        rpy="0 0 0" />
+      <mass
+        value="0.266614745081752" />
+      <inertia
+        ixx="8.05443064196624E-05"
+        ixy="1.87920103875703E-15"
+        ixz="-1.16651727824361E-12"
+        iyy="8.05443064184692E-05"
+        iyz="-3.52761545193665E-13"
+        izz="9.31811515398766E-05" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://carucior_asamblat/meshes/roata_spate_stanga.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://carucior_asamblat/meshes/roata_spate_stanga.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="left_back_wheel"
+    type="continuous">
+    <origin
+      xyz="0.84131 -0.23756 0.36142"
+      rpy="1.5708 1.4028 -1.5708" />
+    <parent
+      link="base_link" />
+    <child
+      link="roata_spate_stanga" />
+    <axis
+      xyz="0 0 1" />
+  </joint>
+
+  <!-- ===================== SENSORS ===================== -->
+  <link name="lidar">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="0.0005" ixy="0" ixz="0" iyy="0.0005" iyz="0" izz="0.0005"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://carucior_asamblat/meshes/lidar.STL"/>
+      </geometry>
+      <material name="sensor_color">
+        <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.05" length="0.08"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="rplidar" type="fixed">
+    <origin xyz="0.43867 -0.12927 1.3141" rpy="0 0 1.5837"/>
+    <parent link="base_link"/>
+    <child link="lidar"/>
+  </joint>
+
+  <link name="camera">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0002" iyz="0" izz="0.0002"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://carucior_asamblat/meshes/camera.STL"/>
+      </geometry>
+      <material name="sensor_color"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.08 0.05 0.05"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="camera_joint" type="fixed">
+    <origin xyz="0.57893 -0.11912 1.2827" rpy="1.5708 0 -1.5708"/>
+    <parent link="base_link"/>
+    <child link="camera"/>
+  </joint>
+
+  <link name="ecran">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.05"/>
+      <inertia ixx="0.00014" ixy="0" ixz="0" iyy="0.00046" iyz="0" izz="0.00032"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://carucior_asamblat/meshes/ecran.STL"/>
+      </geometry>
+      <material name="screen_color">
+        <color rgba="0.627450980392157 0.627450980392157 0.627450980392157 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.25 0.02 0.15"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="lcd" type="fixed">
+    <origin xyz="0.53788 0.023812 1.2956" rpy="-2.1817 0 0"/>
+    <parent link="base_link"/>
+    <child link="ecran"/>
+  </joint>
+
+  <!-- ===================== GAZEBO EXTENSIONS ===================== -->
+
+  <!-- Wheel friction -->
+  <gazebo reference="roata_spate_dreapta">
+    <mu1>1.2</mu1>
+    <mu2>1.2</mu2>
+  </gazebo>
+  <gazebo reference="roata_spate_stanga">
+    <mu1>1.2</mu1>
+    <mu2>1.2</mu2>
+  </gazebo>
+  <gazebo reference="roata_fata_dreapta">
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+  </gazebo>
+  <gazebo reference="roata_fata_stanga">
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+  </gazebo>
+
+  <!-- LiDAR -->
+  <gazebo reference="lidar">
+    <sensor name="lidar_sensor" type="gpu_lidar">
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <visualize>true</visualize>
+      <topic>lidar</topic>
+      <ray>
+        <scan>
+          <horizontal>
+            <samples>720</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14159</min_angle>
+            <max_angle>3.14159</max_angle>
+          </horizontal>
+        </scan>
+        <range>
+          <min>0.12</min>
+          <max>12.0</max>
+          <resolution>0.01</resolution>
+        </range>
+      </ray>
+    </sensor>
+  </gazebo>
+
+  <!-- Depth camera -->
+  <gazebo reference="camera">
+    <sensor name="depth_camera" type="depth_camera">
+      <pose>0 0 0 1.5708 0 0</pose>
+      <always_on>true</always_on>
+      <update_rate>15</update_rate>
+      <visualize>true</visualize>
+      <topic>depth_camera</topic>
+      <camera>
+        <horizontal_fov>1.047</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>10.0</far>
+        </clip>
+      </camera>
+    </sensor>
+    <sensor name="rgb_camera" type="camera">
+      <always_on>true</always_on>
+      <update_rate>15</update_rate>
+      <visualize>true</visualize>
+      <topic>rgb_camera</topic>
+      <camera>
+        <horizontal_fov>1.047</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>1000000.0</far>
+        </clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- DiffDrive -->
+  <gazebo>
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <topic>cmd_vel</topic>
+
+      <odom_frame>odom</odom_frame>
+      <base_frame>base_link</base_frame>
+
+      <publish_odom>true</publish_odom>
+      <publish_odom_tf>false</publish_odom_tf>
+
+      <wheel_separation>0.55</wheel_separation>
+      <wheel_radius>0.12</wheel_radius>
+
+      <left_joint>left_back_wheel</left_joint>
+      <right_joint>right_back_wheel</right_joint>
+
+      <!-- Less aggressive -->
+      <max_linear_velocity>0.4</max_linear_velocity>
+      <max_angular_velocity>1.0</max_angular_velocity>
+      <max_linear_acceleration>0.3</max_linear_acceleration>
+      <max_angular_acceleration>0.8</max_angular_acceleration>
+    </plugin>
+  </gazebo>
+
+</robot>

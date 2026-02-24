@@ -1,0 +1,34 @@
+# ROS 2 / colcon build outputs
+build/
+install/
+log/
+
+# Python caches and compiled files
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Python packaging artifacts
+*.egg-info/
+.eggs/
+dist/
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / editor local settings
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.venv/
+venv/
+yolov8x.pt
+

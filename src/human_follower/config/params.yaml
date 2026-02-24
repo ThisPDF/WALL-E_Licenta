@@ -1,0 +1,25 @@
+dr_spaam_detector:
+  ros__parameters:
+    self_filter_radius: 1.0
+    self_filter_x_offset: 0.5
+    scan_topic: /scan
+    detections_topic: /human_detections
+    rviz_topic: /human_detections_marker
+    weight_file: /home/daniel/ros2_ws/src/human_follower/ckpt_jrdb_ann_ft_drow3_e40.pth  # path to DR-SPAAM weights (.pth)
+    conf_thresh: 0.3
+    stride: 1
+    detector_model: DROW3  # 'DROW3' or 'DR-SPAAM'
+    panoramic_scan: false
+    use_gpu: true
+
+yolo_person_tracker:
+  ros__parameters:
+    image_topic: /camera/rgb/image_raw
+    model: /home/daniel/ros2_ws/yolov8x.pt
+    conf: 0.35
+    iou: 0.5
+    device: "0"        # e.g. "0" for CUDA:0, or "cpu"
+    target_topic: /yolo_person_target
+    publish_debug_image: true
+    debug_image_topic: /yolo_person_debug
+    log_every_n: 30

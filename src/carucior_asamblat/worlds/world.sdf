@@ -1,0 +1,261 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="carucior_world">
+
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <include>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Sun</uri>
+    </include>
+
+    
+    <!-- Supermarket floor area -->
+    <model name="market_floor">
+      <static>true</static>
+      <pose>0 0 0.02 0 0 0</pose>
+      <link name="floor_link">
+        <collision name="floor_collision">
+          <geometry>
+            <box>
+              <size>36 24 0.04</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="floor_visual">
+          <geometry>
+            <box>
+              <size>36 24 0.04</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.75 0.75 0.75 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Outer walls with front entrance opening -->
+    <model name="wall_back">
+      <static>true</static>
+      <pose>0 12 1.4 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>36 0.2 2.8</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>36 0.2 2.8</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="wall_left">
+      <static>true</static>
+      <pose>-18 0 1.4 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.2 24 2.8</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.2 24 2.8</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="wall_right">
+      <static>true</static>
+      <pose>18 0 1.4 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.2 24 2.8</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.2 24 2.8</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="wall_front_left">
+      <static>true</static>
+      <pose>-11.5 -12 1.4 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>13 0.2 2.8</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>13 0.2 2.8</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="wall_front_right">
+      <static>true</static>
+      <pose>11.5 -12 1.4 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>13 0.2 2.8</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>13 0.2 2.8</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Checkout counters near entrance -->
+    <model name="checkout_1">
+      <static>true</static>
+      <pose>-3.5 -5.5 0.55 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>2.8 0.9 1.1</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>2.8 0.9 1.1</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="checkout_2">
+      <static>true</static>
+      <pose>0 -5.5 0.55 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>2.8 0.9 1.1</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>2.8 0.9 1.1</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="checkout_3">
+      <static>true</static>
+      <pose>3.5 -5.5 0.55 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>2.8 0.9 1.1</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>2.8 0.9 1.1</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Aisle shelves -->
+    <model name="shelf_a1_left">
+      <static>true</static>
+      <pose>-7.2 1.5 0.85 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="shelf_a1_right">
+      <static>true</static>
+      <pose>-4.8 1.5 0.85 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="shelf_a2_left">
+      <static>true</static>
+      <pose>-1.2 1.5 0.85 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="shelf_a2_right">
+      <static>true</static>
+      <pose>1.2 1.5 0.85 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="shelf_a3_left">
+      <static>true</static>
+      <pose>4.8 1.5 0.85 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="shelf_a3_right">
+      <static>true</static>
+      <pose>7.2 1.5 0.85 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.0 7.0 1.7</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <!-- Endcaps / promotional islands -->
+    <model name="promo_island_1">
+      <static>true</static>
+      <pose>-8.5 6.2 0.6 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.8 1.2 1.2</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.8 1.2 1.2</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <model name="promo_island_2">
+      <static>true</static>
+      <pose>8.5 6.2 0.6 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>1.8 1.2 1.2</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>1.8 1.2 1.2</size></box></geometry></visual>
+      </link>
+    </model>
+
+    <actor name="human_94763">
+
+      <!-- Pose inițială: în fața intrării, z=1.0 pentru a sta pe podea -->
+      <pose> 0 0 1 0 0 0 </pose>
+
+      <skin>
+        <filename>model://meshes/actor/meshes/SKIN_man_green_shirt.dae</filename>
+        <scale>1.0</scale>
+      </skin>
+
+      <animation name="walking">
+        <filename>model://meshes/actor/meshes/ANIMATION_walking.dae</filename>
+        <interpolate_x>true</interpolate_x>
+      </animation>
+
+     <script>
+        <loop>true</loop>
+        <delay_start>0.0</delay_start>
+        <auto_start>true</auto_start>
+
+        <trajectory id="0" type="walk_slow" tension="0.9">
+
+          <waypoint>
+            <time>0.0</time>
+            <pose>5 -10.6 0 0 0 0</pose>
+          </waypoint>
+
+          <waypoint>
+            <time>21.0</time>
+            <pose>12.5 -11.2 0 0 0 3.13</pose>
+          </waypoint>
+
+          <waypoint>
+            <time>70.0</time>
+            <pose>12.5 8.5 0 0 0 0</pose>
+          </waypoint>
+
+          <waypoint>
+            <time>87.0</time>
+            <pose>5.6 8.5 0 0 0 -0.0055</pose>
+          </waypoint>
+
+          <waypoint>
+            <time>117.0</time>
+            <pose>5.6 -3.19 0 0 0 -1.4998</pose>
+          </waypoint>
+
+          <waypoint>
+            <time>152.0</time>
+            <pose>-8.5 -4.2 0 0 0 0</pose>
+          </waypoint>
+
+          <waypoint>
+            <time>165.0</time>
+            <pose>-8.2 -9.2 0 0 0 0</pose>
+          </waypoint>
+
+        </trajectory>
+      </script>
+
+
+    </actor>
+
+
+
+  </world>
+</sdf>

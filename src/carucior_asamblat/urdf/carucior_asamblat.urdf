@@ -447,5 +447,48 @@
       <max_angular_acceleration>0.8</max_angular_acceleration>
     </plugin>
   </gazebo>
+  <gazebo>
+    <plugin filename="gz-sim-linearbatteryplugin-system"
+            name="gz::sim::systems::LinearBatteryPlugin">
+      <battery_name>main</battery_name>
+
+      <!-- 5600 mAh = 5.6 Ah -->
+      <capacity>5.6</capacity>
+      <initial_charge>5.6</initial_charge>
+
+      <!-- IMPORTANT: trebuie tensiune nominală (ex: 11.1V pentru 3S, 14.8V pentru 4S) -->
+      <voltage>11.1</voltage>
+
+      <!-- HOUSE LOAD: electronice + senzori -->
+      <power_load>28.0</power_load>
+    </plugin>
+  </gazebo>
+  <gazebo>
+    <plugin filename="libdiffdrive_battery_consumer.so"
+            name="gz::sim::systems::DiffDriveBatteryConsumer">
+
+      <!-- același nume ca mai sus -->
+      <battery_name>main</battery_name>
+
+      <!-- IMPORTANT: schimbi cu jointurile tale reale -->
+      <left_joint>left_back_wheel</left_joint>
+      <right_joint>right_back_wheel</right_joint>
+
+      <!-- dacă vrei, poți pune aici house_load_w = 0 și să-l lași doar în baterie,
+          sau invers. Eu recomand să lași house doar în baterie și aici 0. -->
+      <house_load_w>0.0</house_load_w>
+
+      <!-- randament transmisie -->
+      <efficiency>0.75</efficiency>
+
+      <!-- consum minim motoare (W per motor) -->
+      <idle_per_motor_w>3.0</idle_per_motor_w>
+
+      <!-- fallback dacă torque nu e disponibil: -->
+      <vel_coeff_w_per_radps>0.8</vel_coeff_w_per_radps>
+      <acc_coeff_w_per_radps2>0.2</acc_coeff_w_per_radps2>
+
+    </plugin>
+  </gazebo>
 
 </robot>

@@ -1,6 +1,6 @@
 import os
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, OpaqueFunction, SetEnvironmentVariable, TimerAction
@@ -157,13 +157,23 @@ def generate_launch_description():
     pkg_share_path = get_package_share_directory("carucior_asamblat")
     world_path = os.path.join(pkg_share_path, "worlds", "world.sdf")
     pkg_share = FindPackageShare("carucior_asamblat")
+    battery_plugin_lib_path = os.path.join(get_package_prefix("battery_system_plugin"), "lib")
 
     gz_resource_path = SetEnvironmentVariable(
         name="GZ_SIM_RESOURCE_PATH",
         value=[
-            EnvironmentVariable("GZ_SIM_RESOURCE_PATH"),
+            EnvironmentVariable("GZ_SIM_RESOURCE_PATH", default_value=""),
             TextSubstitution(text=":"),
             pkg_share,  # <-- IMPORTANT: share/carucior_asamblat
+        ],
+    )
+
+    gz_system_plugin_path = SetEnvironmentVariable(
+        name="GZ_SIM_SYSTEM_PLUGIN_PATH",
+        value=[
+            EnvironmentVariable("GZ_SIM_SYSTEM_PLUGIN_PATH", default_value=""),
+            TextSubstitution(text=":"),
+            TextSubstitution(text=battery_plugin_lib_path),
         ],
     )
 
@@ -176,6 +186,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         gz_resource_path,
+        gz_system_plugin_path,
         gz_launch,
         OpaqueFunction(function=_make_robot_description),
     ])

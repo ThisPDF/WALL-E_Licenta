@@ -860,17 +860,14 @@ class HumanFollowerNode(Node):
         )
 
         # ══════════════════════════════════════════════════════════════════
-        # [v10-P1] PRIORITATE 1: OBSTACLE EMERGENCY
+        # [v10-P1] PRIORITATE ABSOLUTA: OBSTACLE EMERGENCY
         # Verificat PRIMUL, inainte de orice logica de stare sau tracking
+        # Fara cooldown — siguranta nu se amana niciodata
         # ══════════════════════════════════════════════════════════════════
         if self._obs_emergency and self.obs.is_valid(self.obs_scan_timeout):
             # Forteaza intrarea in DODGE daca nu suntem deja acolo
             if self.state != "OBSTACLE_DODGE":
-                dodge_cooldown_ok = (
-                    self._dodge_exit_time is None or
-                    (now - self._dodge_exit_time) >= self.dodge_cooldown
-                )
-                if self.dodge_enabled and dodge_cooldown_ok:
+                if self.dodge_enabled:
                     self._pre_dodge_state = self.state
                     self.state = "OBSTACLE_DODGE"
                     self.dodge_start_time = now
@@ -882,10 +879,10 @@ class HumanFollowerNode(Node):
                         "warn"
                     )
                 else:
-                    # Dodge dezactivat sau in cooldown — hard stop direct
+                    # Dodge dezactivat — hard stop direct
                     self.publish_cmd(0.0, 0.0, dt)
                     self._flog.info(
-                        f"  [P1] HARD STOP (dodge disabled/cooldown) "
+                        f"  [P1] HARD STOP (dodge disabled) "
                         f"front_min={self.obs.front_min:.3f}m"
                     )
                     return
@@ -951,14 +948,24 @@ class HumanFollowerNode(Node):
                 self.dodge_start_time = None
                 self._dodge_exit_time = now
             elif elapsed_dodge >= self.dodge_timeout:
-                self._log(
-                    f"[TRANZITIE] OBSTACLE_DODGE → {self._pre_dodge_state} "
-                    f"(timeout {elapsed_dodge:.1f}s)",
-                    "warn"
-                )
-                self.state = self._pre_dodge_state
-                self.dodge_start_time = None
-                self._dodge_exit_time = now
+                # Raman in DODGE daca obstacolul e inca in zona de pericol
+                if self.obs.is_valid(self.obs_scan_timeout) and self.obs.front_min <= self.obs_stop_dist:
+                    self._log(
+                        f"[TRANZITIE] OBSTACLE_DODGE timeout dar front_min="
+                        f"{self.obs.front_min:.3f}m <= stop={self.obs_stop_dist}m "
+                        f"— RAMAN in DODGE",
+                        "warn"
+                    )
+                    self.dodge_start_time = now  # Reset timer
+                else:
+                    self._log(
+                        f"[TRANZITIE] OBSTACLE_DODGE → {self._pre_dodge_state} "
+                        f"(timeout {elapsed_dodge:.1f}s)",
+                        "warn"
+                    )
+                    self.state = self._pre_dodge_state
+                    self.dodge_start_time = None
+                    self._dodge_exit_time = now
 
         elif self.state == "SPIN180":
             if any_sensor:

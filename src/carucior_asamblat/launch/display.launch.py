@@ -1,3 +1,7 @@
+"""
+Display launch: doar URDF + joint_state_publisher_gui + RViz, fara Gazebo/SLAM.
+Folosit pentru inspectia vizuala a modelului. Aici map==base_link (TF static).
+"""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
@@ -44,27 +48,32 @@ def generate_launch_description():
         output="screen",
     )
 
+    # Pentru vizualizare standalone (fara Gazebo): leaga map -> base_link
+    # In bringup.launch.py (cu Gazebo+SLAM), aceasta legatura vine prin
+    # slam_toolbox (map->odom) + diff_drive (odom->base_link).
     map_to_base = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
         name="map_to_base_link",
         arguments=[
-            "--x",
-            "0",
-            "--y",
-            "0",
-            "--z",
-            "0",
-            "--roll",
-            "0",
-            "--pitch",
-            "0",
-            "--yaw",
-            "0",
-            "--frame-id",
-            "map",
-            "--child-frame-id",
-            "base_link",
+            "--x", "0", "--y", "0", "--z", "0",
+            "--roll", "0", "--pitch", "0", "--yaw", "0",
+            "--frame-id", "map",
+            "--child-frame-id", "base_link",
+        ],
+        output="screen",
+    )
+
+    # base_link -> base_footprint (proiectie pe sol; util si standalone)
+    base_to_footprint = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="tf_base_link_to_base_footprint",
+        arguments=[
+            "--x", "0", "--y", "0", "--z", "-0.24",
+            "--roll", "0", "--pitch", "0", "--yaw", "0",
+            "--frame-id", "base_link",
+            "--child-frame-id", "base_footprint",
         ],
         output="screen",
     )
@@ -75,6 +84,7 @@ def generate_launch_description():
             joint_state_publisher_gui,
             robot_state_publisher,
             map_to_base,
+            base_to_footprint,
             rviz2,
         ]
     )

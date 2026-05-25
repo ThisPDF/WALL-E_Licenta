@@ -14,8 +14,12 @@
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
 
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+
   <!-- For YOLO camera pipeline -->
   <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

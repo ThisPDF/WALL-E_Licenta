@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import rclpy
@@ -9,6 +9,11 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from geometry_msgs.msg import PointStamped
 from sensor_msgs.msg import Image
+
+try:
+    import cv2  # type: ignore
+except Exception:
+    cv2 = None
 
 try:
     from cv_bridge import CvBridge  # type: ignore
@@ -81,6 +86,8 @@ class YoloPersonTrackerNode(Node):
         self.force_predict      = bool(self.get_parameter("force_predict").value)
         self.log_every_n        = int(self.get_parameter("log_every_n").value)
         self.last_seen_timeout  = float(self.get_parameter("last_seen_timeout").value)
+        self.publish_debug_image = bool(self.get_parameter("publish_debug_image").value)
+        self.debug_image_topic  = str(self.get_parameter("debug_image_topic").value)
 
         self._frame_i = 0
 
@@ -100,6 +107,18 @@ class YoloPersonTrackerNode(Node):
 
         self.pub = self.create_publisher(PointStamped, target_topic, 10)
         self.sub = self.create_subscription(Image, image_topic, self.on_image, qos)
+
+        # Publisher imagine debug (cu bbox-uri desenate)
+        self.dbg_pub = None
+        if self.publish_debug_image:
+            if cv2 is None:
+                self.get_logger().warn(
+                    "publish_debug_image=true dar OpenCV (cv2) nu e disponibil → dezactivat"
+                )
+                self.publish_debug_image = False
+            else:
+                self.dbg_pub = self.create_publisher(Image, self.debug_image_topic, 5)
+                self.get_logger().info(f"YOLO debug image -> {self.debug_image_topic}")
 
         self.get_logger().info(
             f"YOLO -> {image_topic}  pub -> {target_topic} | "
@@ -165,21 +184,26 @@ class YoloPersonTrackerNode(Node):
         except Exception as e:
             self.get_logger().error(f"YOLO inference failed: {e}")
             self._publish_fallback(msg.header, now)
+            self._publish_debug(msg.header, frame, [], None)
             return
 
         if not results:
             self._publish_fallback(msg.header, now)
+            self._publish_debug(msg.header, frame, [], None)
             return
 
         r = results[0]
         if r.boxes is None or len(r.boxes) == 0:
             self._publish_fallback(msg.header, now)
+            self._publish_debug(msg.header, frame, [], None)
             return
 
         h, w = frame.shape[:2]
 
-        # ── Selecteaza cel mai bun om ─────────────────────────────────────
+        # ── Selecteaza cel mai bun om + colecteaza toate boxurile pentru debug
         best: Optional[Target] = None
+        all_boxes: List[Tuple[int, int, int, int, float]] = []
+        best_box: Optional[Tuple[int, int, int, int, float]] = None
         for b in r.boxes:
             try:
                 conf = float(b.conf.item())
@@ -195,6 +219,9 @@ class YoloPersonTrackerNode(Node):
             y_norm = (((y1 + y2) / 2.0 / h) - 0.5) * 2.0
             h_norm = float(np.clip(bh / h, 0.0, 1.0))
 
+            box_int = (int(x1), int(y1), int(x2), int(y2), conf)
+            all_boxes.append(box_int)
+
             t = Target(
                 x_norm=float(x_norm),
                 y_norm=float(y_norm),
@@ -203,15 +230,74 @@ class YoloPersonTrackerNode(Node):
             )
             if best is None or t.conf > best.conf:
                 best = t
+                best_box = box_int
 
         if best is None:
             self._publish_fallback(msg.header, now)
+            self._publish_debug(msg.header, frame, all_boxes, None)
             return
 
         # ── Detectie reusita — actualizeaza memoria ───────────────────────
         self._last_valid_target = best
         self._last_valid_time   = now
         self._publish(msg.header, best, stale=False)
+        self._publish_debug(msg.header, frame, all_boxes, best_box)
+
+    # ── Publica imaginea debug cu bounding boxes ──────────────────────────
+
+    def _publish_debug(self, header, frame, all_boxes, best_box):
+        """
+        Deseneaza bounding boxes peste imagine si publica pe debug_image_topic.
+        - boxuri gri pentru toate detectiile
+        - box verde si gros pentru cel ales (target)
+        """
+        if not self.publish_debug_image or self.dbg_pub is None or cv2 is None:
+            return
+        try:
+            dbg = frame.copy()
+            h, w = dbg.shape[:2]
+
+            # Toate boxurile - gri subtire
+            for (x1, y1, x2, y2, conf) in all_boxes:
+                if best_box is not None and (x1, y1, x2, y2) == best_box[:4]:
+                    continue  # desenam targetul separat, mai jos
+                cv2.rectangle(dbg, (x1, y1), (x2, y2), (180, 180, 180), 1)
+                cv2.putText(
+                    dbg, f"{conf:.2f}", (x1, max(0, y1 - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA
+                )
+
+            # Target - verde, gros + cruce centrala
+            if best_box is not None:
+                x1, y1, x2, y2, conf = best_box
+                cv2.rectangle(dbg, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                cx = (x1 + x2) // 2
+                cy = (y1 + y2) // 2
+                cv2.drawMarker(dbg, (cx, cy), (0, 255, 0),
+                               markerType=cv2.MARKER_CROSS,
+                               markerSize=18, thickness=2)
+                cv2.putText(
+                    dbg, f"TARGET {conf:.2f}", (x1, max(0, y1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA
+                )
+
+            # Linia verticala centrala (alinierea robotului)
+            cv2.line(dbg, (w // 2, 0), (w // 2, h), (255, 255, 0), 1)
+
+            # Numar detectii + status
+            status = f"persons={len(all_boxes)}"
+            if best_box is None:
+                status += "  [NO TARGET]"
+            cv2.putText(
+                dbg, status, (8, 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2, cv2.LINE_AA
+            )
+
+            out = self.bridge.cv2_to_imgmsg(dbg, encoding="bgr8")
+            out.header = header
+            self.dbg_pub.publish(out)
+        except Exception as e:
+            self.get_logger().warn(f"debug image publish failed: {e}")
 
     # ── Fallback cu ultima pozitie valida ─────────────────────────────────
 

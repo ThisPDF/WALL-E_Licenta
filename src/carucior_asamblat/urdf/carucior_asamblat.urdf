@@ -423,16 +423,17 @@
     </sensor>
   </gazebo>
 
-  <!-- DiffDrive -->
+  <!-- DiffDrive (gz-sim) -->
+  <!-- Parametrii reali ai plugin-ului: topic, odom_topic, tf_topic,
+       frame_id, child_frame_id, odom_publish_frequency. -->
   <gazebo>
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
       <topic>cmd_vel</topic>
-
-      <odom_frame>odom</odom_frame>
-      <base_frame>base_link</base_frame>
-
-      <publish_odom>true</publish_odom>
-      <publish_odom_tf>false</publish_odom_tf>
+      <odom_topic>odom</odom_topic>
+      <tf_topic>/model/carucior_asamblat/tf</tf_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_footprint</child_frame_id>
+      <odom_publish_frequency>30</odom_publish_frequency>
 
       <wheel_separation>0.55</wheel_separation>
       <wheel_radius>0.12</wheel_radius>
@@ -440,7 +441,6 @@
       <left_joint>left_back_wheel</left_joint>
       <right_joint>right_back_wheel</right_joint>
 
-      <!-- Less aggressive -->
       <max_linear_velocity>0.4</max_linear_velocity>
       <max_angular_velocity>1.0</max_angular_velocity>
       <max_linear_acceleration>0.3</max_linear_acceleration>

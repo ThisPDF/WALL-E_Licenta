@@ -5,7 +5,10 @@ package_name = 'human_follower'
 setup(
     name=package_name,
     version='0.1.0',
-    packages=find_packages(exclude=['test']),
+    packages=find_packages(exclude=[
+        'test', 'test.*',
+        'human_follower.dr_spaam', 'human_follower.dr_spaam.*',
+    ]),
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
@@ -25,6 +28,8 @@ setup(
             'yolo_person_tracker = human_follower.yolo_tracker_node:main',
             'human_follower = human_follower.follower_node:main',
             'delivery_manager = human_follower.delivery_manager:main',
+            'scan_qos_relay = human_follower.scan_qos_relay:main',
+            'map_explorer = human_follower.map_explorer:main',
         ],
     },
 )

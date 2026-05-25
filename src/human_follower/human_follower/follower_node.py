@@ -113,13 +113,25 @@ class HumanFollowerNode(Node):
         # ── Obstacole LaserScan ───────────────────────────────────────────
         self.declare_parameter("obs_stop_dist",       0.20)
         self.declare_parameter("obs_warn_dist",       0.45)
-        self.declare_parameter("obs_front_half_deg",  20.0)
-        self.declare_parameter("obs_front_full_deg",  50.0)
+        # Largesc cone-ul "front" (era 20°/50° → 35°/70°) ca sa acopere
+        # latimea robotului ~0.7m chiar si la distante mici (~0.5m).
+        self.declare_parameter("obs_front_half_deg",  35.0)
+        self.declare_parameter("obs_front_full_deg",  70.0)
         self.declare_parameter("obs_side_deg",        90.0)
         self.declare_parameter("obs_scan_timeout",    0.5)
         self.declare_parameter("obs_k_ang",           1.5)
         self.declare_parameter("obs_lin_reduce",      0.5)
         self.declare_parameter("obs_min_range",       0.25)
+        # [NOU] Clearance lateral: daca un perete e mai aproape decat asta
+        # pe LATERAL stanga/dreapta, reducem viteza si corectam unghiul
+        # ca sa nu freaca robotul de rafturi cand intra-n culoar.
+        self.declare_parameter("obs_lateral_clearance", 0.35)
+        self.declare_parameter("obs_lateral_k_ang",     1.2)
+
+        # [SAFETY ABSOLUT] Daca ORICE punct lidar e sub asta in lidar 360°,
+        # STOP TOTAL indiferent de stare. Protectie hardware impotriva
+        # ciocnirilor fizice (independent de orientarea senzorului).
+        self.declare_parameter("panic_stop_dist", 0.18)
 
         # ── OBSTACLE_DODGE ────────────────────────────────────────────────
         self.declare_parameter("dodge_timeout",          3.0)
@@ -131,7 +143,10 @@ class HumanFollowerNode(Node):
 
         # ── Debounce stare ────────────────────────────────────────────────
         self.declare_parameter("follow_enter_delay", 0.2)
-        self.declare_parameter("follow_exit_delay",  0.8)
+        # Marit la 2.5s: YOLO+LIDAR au glitch-uri scurte (hot/cold),
+        # nu sarim in recovery la fiecare clipire — asteptam destul de mult
+        # ca sa fim siguri ca persoana e cu adevarat pierduta.
+        self.declare_parameter("follow_exit_delay",  2.5)
 
         # ── Smoothing ─────────────────────────────────────────────────────
         self.declare_parameter("control_rate_hz",     20.0)
@@ -156,7 +171,15 @@ class HumanFollowerNode(Node):
         self.declare_parameter("search_alternating",    True)
         self.declare_parameter("search_lin_speed",      0.15)
         self.declare_parameter("spin180_angular_speed", 1.2)
-        self.declare_parameter("spin180_enabled",       True)
+        # OFF default: user-cerut — spin180 deruta robotul si pierdea persoana
+        # Trecem direct in LOST si asteptam ca persoana sa reapara
+        self.declare_parameter("spin180_enabled",       False)
+        # [SAFETY] Prag pentru recovery panic-stop: minim peste TOATE razele.
+        # Mic (0.30m), ca sa nu intre orbeste in pereti DAR sa permita
+        # operarea pe culoare inguste (peretii sunt la ~0.35m).
+        self.declare_parameter("recovery_safe_dist",    0.30)
+        # Cat sa rotim in faza spin180 (default 90deg in loc de 180deg)
+        self.declare_parameter("spin180_angle_deg",     90.0)
 
         # ── Logging ───────────────────────────────────────────────────────
         self.declare_parameter("log_file",              "~/follow_logs/follower.log")
@@ -198,6 +221,10 @@ class HumanFollowerNode(Node):
         self.search_lin_speed     = float(self.get_parameter("search_lin_speed").value)
         self.spin180_angular_speed= float(self.get_parameter("spin180_angular_speed").value)
         self.spin180_enabled      = bool(self.get_parameter("spin180_enabled").value)
+        self.recovery_safe_dist   = float(self.get_parameter("recovery_safe_dist").value)
+        self.spin180_angle_rad    = math.radians(
+            float(self.get_parameter("spin180_angle_deg").value)
+        )
 
         # Lock params
         self.lock_max_dist        = float(self.get_parameter("lock_max_dist_m").value)
@@ -221,6 +248,9 @@ class HumanFollowerNode(Node):
         self.obs_k_ang        = float(self.get_parameter("obs_k_ang").value)
         self.obs_lin_reduce   = float(self.get_parameter("obs_lin_reduce").value)
         self.obs_min_range    = float(self.get_parameter("obs_min_range").value)
+        self.obs_lateral_clear = float(self.get_parameter("obs_lateral_clearance").value)
+        self.obs_lateral_k_ang = float(self.get_parameter("obs_lateral_k_ang").value)
+        self.panic_stop_dist   = float(self.get_parameter("panic_stop_dist").value)
 
         # Dodge
         self.dodge_timeout       = float(self.get_parameter("dodge_timeout").value)
@@ -231,7 +261,8 @@ class HumanFollowerNode(Node):
         self.dodge_cooldown      = float(self.get_parameter("dodge_cooldown").value)
 
         self._h_max_valid_base = self.h_max_valid
-        self._spin180_duration = math.pi / max(0.1, self.spin180_angular_speed)
+        # Durata spin180 calculata din unghiul cerut (default 90deg → ~0.75s la 1.2rad/s)
+        self._spin180_duration = self.spin180_angle_rad / max(0.1, self.spin180_angular_speed)
 
         filt_l = int(self.get_parameter("lidar_dist_filter_size").value)
         filt_y = int(self.get_parameter("yolo_filter_size").value)
@@ -283,6 +314,8 @@ class HumanFollowerNode(Node):
         self._obs_hard_stop_active: bool = False
         # Flag setat direct de on_scan() — verificat PRIMUL in control_step
         self._obs_emergency: bool = False
+        # Min global pe TOATE razele valide (independent de bucketing)
+        self._global_min: float = float("inf")
 
         # ── Memorie directie ──────────────────────────────────────────────
         self.last_known_x_norm: float = 0.0
@@ -372,11 +405,18 @@ class HumanFollowerNode(Node):
         obs = ObstacleSectors()
         obs.timestamp = time.time()
 
+        # [SAFETY] Track minim global pe TOATE ranges valide → folosit in
+        # recovery (SPIN180/SEARCH) ca panic-stop indiferent de orientarea
+        # lidar-ului sau de bucketing-ul pe sectoare front/side.
+        global_min = float("inf")
+
         for i, r in enumerate(msg.ranges):
             if not math.isfinite(r) or r < msg.range_min or r > msg.range_max:
                 continue
             if r < self.obs_min_range:
                 continue
+            if r < global_min:
+                global_min = r
             angle = normalize_angle(msg.angle_min + i * msg.angle_increment)
             abs_a = abs(angle)
             if abs_a <= self.obs_front_half:
@@ -398,6 +438,7 @@ class HumanFollowerNode(Node):
                         obs.side_right = r
 
         self.obs = obs
+        self._global_min = global_min
 
         # [v10-P1] Seteaza flag de urgenta direct din callback, fara sa astepte control_step
         prev_emergency = self._obs_emergency
@@ -693,22 +734,51 @@ class HumanFollowerNode(Node):
             self._obs_hard_stop_active = True
             return 0.0, ang, True
         self._obs_hard_stop_active = False
+
+        # ── [NOU] Clearance lateral — doar slow down, fara steering ─────
+        # Daca un perete e aproape pe lateral, doar reducem viteza.
+        # NU schimbam unghiul: tinta (YOLO/lidar) poate fi exact in directia
+        # peretelui (persoana dupa colt), iar steering-ul ar opune tracker-ul.
+        # Centering activ doar in culoar real (ambele laterale aproape).
+        lin_mod, ang_mod = lin, ang
+        sl, sr = self.obs.side_left, self.obs.side_right
+        lin_scale_lat = 1.0
+        center_correction = 0.0
+        if sl < self.obs_lateral_clear or sr < self.obs_lateral_clear:
+            if sl < self.obs_lateral_clear:
+                lin_scale_lat = min(lin_scale_lat, sl / self.obs_lateral_clear)
+            if sr < self.obs_lateral_clear:
+                lin_scale_lat = min(lin_scale_lat, sr / self.obs_lateral_clear)
+            # Centering activ DOAR cand culoar (ambele laterale stranse)
+            if sl < self.obs_lateral_clear and sr < self.obs_lateral_clear:
+                # Vireaza spre side-ul cu mai mult spatiu (dintre cele 2 strans-ate)
+                center_correction = self.obs_lateral_k_ang * 0.5 * (sl - sr)
+                lin_scale_lat *= 0.6
+            lin_mod = lin * clamp(lin_scale_lat, 0.3, 1.0)
+            ang_mod = clamp(ang + center_correction, -self.max_angular, self.max_angular)
+            self._flog.info(
+                f"  [OBS-LAT] sl={sl:.2f}m sr={sr:.2f}m "
+                f"center={center_correction:+.2f} scale={lin_scale_lat:.2f} "
+                f"lin:{lin:.3f}→{lin_mod:.3f} ang:{ang:.3f}→{ang_mod:.3f}"
+            )
+
+        # ── Front WARN (frana + steering spre side liber) ────────────────
         if fm < self.obs_warn_dist:
             factor  = (fm - self.obs_stop_dist) / (self.obs_warn_dist - self.obs_stop_dist)
-            lin_mod = lin * clamp(factor, 0.0, 1.0) * self.obs_lin_reduce
+            lin_mod = lin_mod * clamp(factor, 0.0, 1.0) * self.obs_lin_reduce
             clear   = self.obs.clear_side
             obs_ang_offset = (
                 self.obs_k_ang * (1.0 - factor)
                 if clear == "LEFT"
                 else -self.obs_k_ang * (1.0 - factor)
             )
-            ang_mod = clamp(ang + obs_ang_offset, -self.max_angular, self.max_angular)
+            ang_mod = clamp(ang_mod + obs_ang_offset, -self.max_angular, self.max_angular)
             self._flog.info(
                 f"  [OBS] WARN front_min={fm:.3f}m factor={factor:.2f} "
                 f"lin:{lin:.3f}→{lin_mod:.3f} ang_offset={obs_ang_offset:+.2f} clear={clear}"
             )
-            return lin_mod, ang_mod, False
-        return lin, ang, False
+
+        return lin_mod, ang_mod, False
 
     def _lin_from_dist(self, d: float) -> Optional[float]:
         if d <= self.dist_collision_stop:
@@ -779,6 +849,21 @@ class HumanFollowerNode(Node):
         now = time.time()
         dt  = 1.0 / max(1.0, self.control_rate_hz)
         self.step_count += 1
+
+        # ── [SAFETY ABSOLUT] Panic stop fizic ──────────────────────────────
+        # Independent de orientarea lidar, de bucketing, de stare.
+        # Daca orice punct lidar < panic_stop_dist (~ rotita robotului),
+        # oprim TOTAL. Nu mai conteaza unde-i persoana — n-avem voie sa lovim.
+        if (self.obs.is_valid(self.obs_scan_timeout) and
+                self._global_min < self.panic_stop_dist):
+            self.publish_cmd(0.0, 0.0, dt)
+            if self.step_count % 10 == 0:
+                self._log(
+                    f"[PANIC] global_min={self._global_min:.3f}m < "
+                    f"panic={self.panic_stop_dist:.3f}m. STOP TOTAL (orice stare).",
+                    "warn"
+                )
+            return
 
         lidar_ok = (self.last_lidar is not None and
                     (now - self.last_lidar[2]) <= self.target_timeout)
@@ -905,7 +990,23 @@ class HumanFollowerNode(Node):
             elif self.state == "FOLLOW":
                 if self.yolo_missing_since is not None and yolo_miss_s >= self.follow_exit_delay:
                     if not lidar_ok:
-                        if self._obs_hard_stop_active:
+                        # [SAFETY] Obstacol aproape => nu intra in recovery orb,
+                        # treci direct in LOST. Persoana s-a ascuns dupa colt;
+                        # mai bine astept decat sa intru in zid.
+                        obstacle_near = (
+                            self.obs.is_valid(self.obs_scan_timeout) and
+                            self._global_min < self.recovery_safe_dist
+                        )
+                        if obstacle_near:
+                            self._log(
+                                f"[TRANZITIE] FOLLOW → LOST "
+                                f"(YOLO+LIDAR pierdute, obstacol global la "
+                                f"{self._global_min:.2f}m < safe="
+                                f"{self.recovery_safe_dist:.2f}m — STOP)",
+                                "warn"
+                            )
+                            self.state = "LOST"
+                        elif self._obs_hard_stop_active:
                             self._flog.info(
                                 "  [TRANZITIE] YOLO disparut + LIDAR lipseste "
                                 "dar HARD STOP activ → raman in FOLLOW"
@@ -1018,6 +1119,25 @@ class HumanFollowerNode(Node):
         # ══════════════════════════════════════════════════════════════════
         # EXECUTIE PE STARE
         # ══════════════════════════════════════════════════════════════════
+
+        # ── [SAFETY] Recovery panic-stop ───────────────────────────────────
+        # SPIN180/SEARCH NU rotesc orbeste cand un obstacol e foarte aproape.
+        # Folosim _global_min (minimul peste TOATE razele lidar valide),
+        # independent de orientarea lidar-ului / bucketing front-side.
+        if (self.state in ("SPIN180", "SEARCH") and
+                self.obs.is_valid(self.obs_scan_timeout) and
+                self._global_min < self.recovery_safe_dist):
+            self._log(
+                f"[SAFETY] {self.state} → LOST (obstacol global la "
+                f"{self._global_min:.2f}m < safe={self.recovery_safe_dist:.2f}m). "
+                f"STOP, astept persoana.",
+                "warn"
+            )
+            self.state = "LOST"
+            self.spin180_start_time = None
+            self.search_start_time  = None
+            self.publish_cmd(0.0, 0.0, dt)
+            return
 
         if self.state == "OBSTACLE_DODGE":
             elapsed_dodge = (now - self.dodge_start_time) if self.dodge_start_time else 0.0

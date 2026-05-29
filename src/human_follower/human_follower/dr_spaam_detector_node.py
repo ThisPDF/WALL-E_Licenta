@@ -201,7 +201,9 @@ class DrSpaamDetectorNode(Node):
         dets_conf = np.array(dets_conf).reshape(-1)
         conf_mask = dets_conf >= self.conf_thresh
         dets_xy = np.array(dets_xy)[conf_mask]
-        # Inverseaza axa X (fata <-> spate)
+        # Inverseaza axa X (fata <-> spate) — lidar montat rotit ~π fata de
+        # base_footprint; X-flip compenseaza pentru ca follower-ul citeste
+        # (x,y) ca si cum ar fi in frame robot.
         dets_xy[:, 0] = -dets_xy[:, 0]
 
         # Ignore cart/robot detections

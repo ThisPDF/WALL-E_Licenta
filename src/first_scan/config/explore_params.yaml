@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    use_sim_time: true
+    robot_base_frame: base_footprint
+    return_to_init: false
+    costmap_topic: /global_costmap/costmap
+    costmap_updates_topic: /global_costmap/costmap_updates
+    visualize: true
+    # 0.033 = ~30s intre replan-uri. Anterior 0.10 = 10s era prea agresiv:
+    # explore_lite preempta goal-ul inainte ca nav2 sa-l atinga → robotul
+    # comuta directia mereu si nu ajungea niciodata, harta nu se completa.
+    planner_frequency: 0.033
+    progress_timeout: 120.0
+    potential_scale: 3.0
+    orientation_scale: 0.0
+    gain_scale: 1.0
+    transform_tolerance: 0.5
+    # 0.6m → frontiere semnificative (peste zgomotul tipic 2-3 pixeli).
+    # Anterior 0.3 era prea mic si genera frontiere mici inguste pe care
+    # planner-ul nu putea ajunge (Failed to create plan from potential).
+    min_frontier_size: 0.6

@@ -79,9 +79,12 @@ class HumanFollowerNode(Node):
 
         # ── Comportament ──────────────────────────────────────────────────
         self.declare_parameter("approach_distance",   0.8)
-        self.declare_parameter("max_linear",          1.2)
+        # [v11] max_linear 1.2→1.5: compromis intre "nu se inchide niciodata" si
+        # "iese din harta". 2.0 era prea agresiv combinat cu STALE YOLO sustinut.
+        # k_lin 2.5→3.5 ca sa atinga max mai repede pe distanta moderata.
+        self.declare_parameter("max_linear",          1.5)
         self.declare_parameter("max_angular",         1.8)
-        self.declare_parameter("k_lin",               2.5)
+        self.declare_parameter("k_lin",               3.5)
         self.declare_parameter("k_ang",               2.0)
         self.declare_parameter("target_timeout",      1.0)
         self.declare_parameter("dist_tinta",          1.2)
@@ -94,21 +97,32 @@ class HumanFollowerNode(Node):
         self.declare_parameter("lidar_dist_filter_size", 3)
         self.declare_parameter("lidar_max_dist_jump",    1.5)
         self.declare_parameter("lidar_spike_reset_time", 2.0)
-        self.declare_parameter("lidar_max_track_angle",  120.0)
+        # [v11] 120°→60°: persoana urmarita e mereu ~in fata (FOV camera). Un
+        # candidat lidar peste ±60° e perete/raft sau lock driftat — il ignoram
+        # ca sa nu steer-uim brusc spre el (cauza spin-ului care pierdea omul).
+        self.declare_parameter("lidar_max_track_angle",  60.0)
 
         # ── [v10] Sticky target lock ───────────────────────────────────────
         # Scor candidat = hits * w_hits + yolo_bonus * w_yolo
         self.declare_parameter("lock_max_dist_m",      0.6)
         self.declare_parameter("lock_min_hits",        3)
-        self.declare_parameter("lock_timeout",         1.5)
+        self.declare_parameter("lock_timeout",         3.0)  # [v11] 1.5→3.0: tine lock-ul lidar prin pauzele DROW3/YOLO
         self.declare_parameter("lock_max_candidates",  8)
         self.declare_parameter("lock_ema_alpha",       0.4)
         # Unghi maxim intre directia YOLO si directia candidatului
         # pentru a acorda yolo_bonus (radiani)
-        self.declare_parameter("lock_yolo_align_deg",  25.0)
+        # [v11] 25°→18°: cerem aliniere mai stransa YOLO↔lidar ca sa confirmam
+        # (si sa blocam) doar candidatul real al persoanei, nu pereti din apropiere.
+        self.declare_parameter("lock_yolo_align_deg",  18.0)
         # Pondere hits vs bonus YOLO in scorul total
         self.declare_parameter("lock_w_hits",          1.0)
         self.declare_parameter("lock_w_yolo",          30.0)  # echivalent ~30 hits
+        # [v11] Ancorare pe YOLO: un lock NOU se acorda doar candidatilor pe care
+        # YOLO ii confirma (yolo_bonus >= lock_yolo_min). In sim, DROW3 da multe
+        # false-positives pe rafturi/pereti; fara confirmare YOLO robotul urmarea
+        # pereti. Lock-ul existent ramane STICKY prin clipirile scurte ale YOLO.
+        self.declare_parameter("lock_require_yolo",    True)
+        self.declare_parameter("lock_yolo_min",        0.15)
 
         # ── Obstacole LaserScan ───────────────────────────────────────────
         self.declare_parameter("obs_stop_dist",       0.20)
@@ -132,6 +146,20 @@ class HumanFollowerNode(Node):
         # STOP TOTAL indiferent de stare. Protectie hardware impotriva
         # ciocnirilor fizice (independent de orientarea senzorului).
         self.declare_parameter("panic_stop_dist", 0.18)
+        # [v11] Lidar e montat rotit ~pi fata de base_footprint (URDF:
+        # base_footprint→base_link +pi/2 + base_link→lidar +1.5837 ≈ pi).
+        # Adaugam offset-ul la unghiul brut din /scan ca sectoarele
+        # front/side din on_scan sa corespunda orientarii REALE a robotului.
+        # Altfel "FC" (front) e de fapt spate, iar peretii din fata nu mai
+        # frneaza follower-ul → robotul intra in zid la viteza max.
+        self.declare_parameter("obs_angle_offset", math.pi)
+        # [v11] Corpul caruciorului apare in /scan brut la ~0.25m (rear/side).
+        # Ignoram returnarile sub acest prag cand calculam global_min, altfel
+        # global_min ramane fix la ~0.25m si blocheaza recovery (FOLLOW→LOST in
+        # loc de SEARCH). Robotul are ~0.66m latime → nimic real nu poate fi atat
+        # de aproape de lidar fara sa loveasca intai corpul. Sectoarele front/side
+        # raman pe obs_min_range, deci stop-ul frontal real nu e afectat.
+        self.declare_parameter("self_clearance", 0.32)
 
         # ── OBSTACLE_DODGE ────────────────────────────────────────────────
         self.declare_parameter("dodge_timeout",          3.0)
@@ -167,17 +195,18 @@ class HumanFollowerNode(Node):
 
         # ── SEARCH / RECOVERY ─────────────────────────────────────────────
         self.declare_parameter("search_angular_speed",  0.5)
-        self.declare_parameter("search_timeout",        8.0)
+        self.declare_parameter("search_timeout",        16.0)  # [v11] 8→16: baleiaza mai mult inainte de a renunta (LOST)
         self.declare_parameter("search_alternating",    True)
         self.declare_parameter("search_lin_speed",      0.15)
         self.declare_parameter("spin180_angular_speed", 1.2)
         # OFF default: user-cerut — spin180 deruta robotul si pierdea persoana
         # Trecem direct in LOST si asteptam ca persoana sa reapara
         self.declare_parameter("spin180_enabled",       False)
-        # [SAFETY] Prag pentru recovery panic-stop: minim peste TOATE razele.
-        # Mic (0.30m), ca sa nu intre orbeste in pereti DAR sa permita
-        # operarea pe culoare inguste (peretii sunt la ~0.35m).
-        self.declare_parameter("recovery_safe_dist",    0.30)
+        # [SAFETY] Prag pentru recovery panic-stop: minim peste razele reale
+        # (dupa excluderea corpului caruciorului via self_clearance).
+        # Intre self_clearance (~0.32m) si peretii de culoar (~0.35m): firul subtire
+        # in care chiar exista un obstacol real periculos de aproape → STOP, nu spin.
+        self.declare_parameter("recovery_safe_dist",    0.34)
         # Cat sa rotim in faza spin180 (default 90deg in loc de 180deg)
         self.declare_parameter("spin180_angle_deg",     90.0)
 
@@ -237,6 +266,8 @@ class HumanFollowerNode(Node):
         )
         self.lock_w_hits          = float(self.get_parameter("lock_w_hits").value)
         self.lock_w_yolo          = float(self.get_parameter("lock_w_yolo").value)
+        self.lock_require_yolo    = bool(self.get_parameter("lock_require_yolo").value)
+        self.lock_yolo_min        = float(self.get_parameter("lock_yolo_min").value)
 
         # Obstacole
         self.obs_stop_dist    = float(self.get_parameter("obs_stop_dist").value)
@@ -251,6 +282,8 @@ class HumanFollowerNode(Node):
         self.obs_lateral_clear = float(self.get_parameter("obs_lateral_clearance").value)
         self.obs_lateral_k_ang = float(self.get_parameter("obs_lateral_k_ang").value)
         self.panic_stop_dist   = float(self.get_parameter("panic_stop_dist").value)
+        self.self_clearance    = float(self.get_parameter("self_clearance").value)
+        self.obs_angle_offset  = float(self.get_parameter("obs_angle_offset").value)
 
         # Dodge
         self.dodge_timeout       = float(self.get_parameter("dodge_timeout").value)
@@ -368,10 +401,11 @@ class HumanFollowerNode(Node):
         self.timer = self.create_timer(timer_dt, self.control_step)
 
         self.get_logger().info(
-            f"[v10] START  lock_min_hits={self.lock_min_hits}  "
+            f"[v11] START  lock_min_hits={self.lock_min_hits}  "
             f"lock_timeout={self.lock_timeout}s  "
-            f"lock_w_yolo={self.lock_w_yolo}  "
-            f"obs_stop={self.obs_stop_dist}m  obs_warn={self.obs_warn_dist}m"
+            f"require_yolo={self.lock_require_yolo}(min={self.lock_yolo_min})  "
+            f"self_clearance={self.self_clearance}m  "
+            f"recovery_safe={self.recovery_safe_dist}m"
         )
         self._flog.info("=" * 70)
         self._flog.info("  HUMAN FOLLOWER v10 — START")
@@ -415,9 +449,11 @@ class HumanFollowerNode(Node):
                 continue
             if r < self.obs_min_range:
                 continue
-            if r < global_min:
+            # global_min ignora corpul caruciorului (returnari < self_clearance);
+            # sectoarele front/side de mai jos raman pe obs_min_range.
+            if r >= self.self_clearance and r < global_min:
                 global_min = r
-            angle = normalize_angle(msg.angle_min + i * msg.angle_increment)
+            angle = normalize_angle(msg.angle_min + i * msg.angle_increment + self.obs_angle_offset)
             abs_a = abs(angle)
             if abs_a <= self.obs_front_half:
                 if r < obs.front_ctr:
@@ -676,6 +712,36 @@ class HumanFollowerNode(Node):
         if self._locked_id is not None:
             locked = self._lock_candidates.get(self._locked_id)
             if locked and locked["hits"] >= self.lock_min_hits:
+                # [v11] Switch daca apare un candidat YOLO-confirmat semnificativ
+                # mai aproape (persoana e in prim-plan, peretele in spate; lidar-ul
+                # vede ambele iar YOLO confirma directia comuna).
+                cur_d = math.hypot(locked["x"], locked["y"])
+                best_closer_d = float("inf")
+                best_closer_cid = None
+                for cid, c in self._lock_candidates.items():
+                    if cid == self._locked_id:
+                        continue
+                    if c["yolo_bonus"] < self.lock_yolo_min:
+                        continue
+                    if c["hits"] < self.lock_min_hits:
+                        continue
+                    d = math.hypot(c["x"], c["y"])
+                    if d < best_closer_d:
+                        best_closer_d = d
+                        best_closer_cid = cid
+                if best_closer_cid is not None and best_closer_d < 0.6 * cur_d:
+                    new = self._lock_candidates[best_closer_cid]
+                    self._log(
+                        f"[LOCK] *** SWITCH #{self._locked_id}(d={cur_d:.2f}m) "
+                        f"→ #{best_closer_cid}(d={best_closer_d:.2f}m, mai aproape, "
+                        f"yolo_bonus={new['yolo_bonus']:.2f}) ***",
+                        "warn"
+                    )
+                    self._locked_id = best_closer_cid
+                    self.lidar_dist_buf.clear()
+                    self.lidar_ang_buf.clear()
+                    self.last_lidar_raw_dist = None
+                    return new
                 return locked
             self._log(
                 f"[LOCK] Lock #{self._locked_id} invalid → recalculez",
@@ -683,10 +749,31 @@ class HumanFollowerNode(Node):
             )
             self._locked_id = None
 
-        # Alege candidatul cu scorul maxim
-        best_cid = max(
-            self._lock_candidates,
-            key=lambda cid: self._candidate_score(self._lock_candidates[cid])
+        # [v11] Un lock NOU se acorda doar candidatilor confirmati de YOLO.
+        # Fara confirmare, DROW3 in sim ar fixa rafturi/pereti. Lock-ul existent
+        # ramane sticky (verificat mai sus) → clipirile scurte YOLO nu pierd tinta.
+        if self.lock_require_yolo:
+            eligible = [
+                cid for cid, c in self._lock_candidates.items()
+                if c["yolo_bonus"] >= self.lock_yolo_min
+            ]
+        else:
+            eligible = list(self._lock_candidates.keys())
+
+        if not eligible:
+            # Niciun candidat confirmat de YOLO → fara lock lidar.
+            # Follower-ul cade pe YOLO-only sau intra in SEARCH (nu urmareste pereti).
+            return None
+
+        # [v11] Alege CEL MAI APROAPIAT candidat YOLO-confirmat. Persoana e mereu
+        # in prim-plan; un perete cu mult hits/scor in spatele ei nu trebuie sa
+        # bata persoana doar fiindca a stat mai mult. Distanta = semnal puternic.
+        best_cid = min(
+            eligible,
+            key=lambda cid: math.hypot(
+                self._lock_candidates[cid]["x"],
+                self._lock_candidates[cid]["y"]
+            )
         )
         best = self._lock_candidates[best_cid]
 
@@ -705,9 +792,9 @@ class HumanFollowerNode(Node):
                 self.last_lidar_raw_dist = None
             return best
 
-        # Fallback la cel mai aproape daca nu exista candidat suficient de consistent
+        # Fallback: cel mai aproape DINTRE candidatii confirmati de YOLO
         closest_cid = min(
-            self._lock_candidates,
+            eligible,
             key=lambda cid: math.hypot(
                 self._lock_candidates[cid]["x"],
                 self._lock_candidates[cid]["y"]
@@ -812,7 +899,11 @@ class HumanFollowerNode(Node):
         if (abs(lin_x - self.last_publish_lin) >= self.publish_eps_lin or
                 abs(ang_z - self.last_publish_ang) >= self.publish_eps_ang):
             cmd = Twist()
-            cmd.linear.x  = -lin_x
+            # Conventie standard ROS (dupa fix URDF + flip wheel axes):
+            #   linear.x  > 0 → robot inainte (base_footprint +X)
+            #   angular.z > 0 → CCW (left turn)
+            # NU mai inversam linear.x (era hack pentru URDF gresit)
+            cmd.linear.x  = lin_x
             cmd.angular.z = ang_z
             self.cmd_pub.publish(cmd)
             self.last_publish_lin = lin_x
@@ -1208,7 +1299,10 @@ class HumanFollowerNode(Node):
             if lin_raw is None:
                 self.publish_cmd(0.0, 0.0, dt)
                 return
-            ang_raw = 0.0 if abs(x_norm) < self.centered_threshold else self.k_ang * x_norm
+            # ang_z>0 = CCW/stanga. Detectiile dau stanga<0 (YOLO: imaginea are
+            # dreapta=+x; LIDAR: y oglindit de flip-ul X din dr_spaam, lidar montat
+            # rotit ~180°). Negam ca sa rotim SPRE persoana (conventie standard ROS).
+            ang_raw = 0.0 if abs(x_norm) < self.centered_threshold else -self.k_ang * x_norm
             lin_mod, ang_mod, hard_stop = self._apply_obstacle_modulation(
                 lin_raw, ang_raw, moving_forward=(lin_raw > 0)
             )
@@ -1232,7 +1326,13 @@ class HumanFollowerNode(Node):
             if lin_raw is None:
                 self.publish_cmd(0.0, 0.0, dt)
                 return
-            ang_raw = 0.0 if abs(ang) < self.centered_threshold else self.k_ang * ang
+            # Negam: /human_detections are y oglindit (dr_spaam flip X pe lidar
+            # montat ~180°), deci stanga reala apare cu ang<0. Vezi ramura FUSED.
+            ang_raw = 0.0 if abs(ang) < self.centered_threshold else -self.k_ang * ang
+            # [v11] Cap pe LIDAR-ONLY ang: cand YOLO clipeste, candidatul lidar
+            # poate fi driftat sau in dezacord cu YOLO → un steer max ar biciui
+            # robotul si l-ar arunca din traiectorie. Steer gentil pana revine YOLO.
+            ang_raw = clamp(ang_raw, -0.8, 0.8)
             lin_mod, ang_mod, hard_stop = self._apply_obstacle_modulation(
                 lin_raw, ang_raw, moving_forward=(lin_raw > 0)
             )
@@ -1259,7 +1359,9 @@ class HumanFollowerNode(Node):
                 )
                 return
             lin_raw = self.k_lin * (self.h_set - h_norm) * self.forward_sign
-            ang_raw = 0.0 if abs(x_norm) < self.centered_threshold else self.k_ang * x_norm
+            # Negam: imaginea are dreapta=+x_norm, deci persoana in stanga da
+            # x_norm<0 → ang_z>0 (CCW) ca sa rotim spre ea. Vezi ramura FUSED.
+            ang_raw = 0.0 if abs(x_norm) < self.centered_threshold else -self.k_ang * x_norm
             lin_mod, ang_mod, hard_stop = self._apply_obstacle_modulation(
                 lin_raw, ang_raw, moving_forward=(lin_raw > 0)
             )

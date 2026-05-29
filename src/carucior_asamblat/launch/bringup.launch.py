@@ -98,6 +98,44 @@ def generate_launch_description():
         ],
     )
 
+    # ── cmd_vel_inverter — inverseaza linear.x intre publishers ROS
+    # (nav2, follower, delivery_manager — toti publica /cmd_vel) si gazebo
+    # (subscribe /cmd_vel_gz dupa remap). Compensseaza diferenta de
+    # conventie introdusa de rotatia base_footprint→base_link in URDF.
+    cmd_vel_inverter = Node(
+        package="human_follower",
+        executable="cmd_vel_inverter",
+        name="cmd_vel_inverter",
+        output="screen",
+        parameters=[{
+            "use_sim_time":       use_sim_time,
+            "input_topic":        "/cmd_vel",
+            "output_topic":       "/cmd_vel_gz",
+            # Doar linear.x are nevoie de inversare (URDF-ul are
+            # base_footprint→base_link cu yaw +π/2 + wheel axes originale,
+            # ceea ce inverseaza sensul "forward" intre cmd_vel ROS si
+            # plugin-ul diff_drive Gazebo).
+            #
+            # angular.z NU trebuie inversat: daca il inversezi, plugin-ul
+            # comanda fizic robotul sa se invarta in directia opusa fata
+            # de ce raporteaza in odom → RViz (citeste TF din odom)
+            # arata o rotatie, dar fizic robotul face alta → SLAM primeste
+            # input inconsistent si harta se corupe (frontiere zero pentru
+            # explore_lite). Cu invert_angular_z=False, plugin-ul comanda
+            # si raporteaza acelasi sens → consistenta TF↔fizic.
+            # TEST diagnostic: dezactivam complet inverter-ul.
+            # Daca robotul merge in directia gresita (fata <-> spate sau
+            # stanga <-> dreapta), re-pun True pe componenta gresita.
+            # Cu URDF-ul cu rotatia base_footprint +π/2 si wheel axes ca in
+            # URDF, plugin-ul diff_drive ar trebui sa comande fizic corect
+            # fara inversare (sensul "forward" in cmd_vel coincide cu
+            # base_footprint +X, iar rotile rotesc cart-ul in +X la viteza
+            # pozitiva de joint).
+            "invert_linear_x":    False,
+            "invert_angular_z":   False,
+        }],
+    )
+
     # ── SLAM (LifecycleNode + configure + activate) ───────────────────────
     # Daca exista harta → pass map_file_name pentru a o incarca
     slam_extra_params = {
@@ -147,8 +185,11 @@ def generate_launch_description():
         condition=IfCondition(slam_arg),
     )
 
-    # ── nav2 costmaps (global + local) ────────────────────────────────────
-    # Sunt LifecycleNodes, gestionate de nav2_lifecycle_manager.
+    # ── nav2 costmaps standalone (DOAR cand harta e incarcata, NU la mapping) ─
+    # In modul mapping, costmap-urile vin din nav2 navigation stack (planner/
+    # controller_server), deci nu le pornim separat ca sa nu fie duplicate.
+    # In modul localization (harta exista), pornim costmap-urile standalone
+    # pentru vizualizare in rviz.
     global_costmap_node = LifecycleNode(
         package="nav2_costmap_2d",
         executable="nav2_costmap_2d",
@@ -174,17 +215,14 @@ def generate_launch_description():
             "use_sim_time": use_sim_time,
             "autostart": True,
             "node_names": ["global_costmap", "local_costmap"],
-            "bond_timeout": 0.0,        # nu blocheaza la timeout
+            "bond_timeout": 0.0,
             "attempt_respawn_reconnection": False,
         }],
     )
-    # IMPORTANT: pornim costmap-urile DUPA ce SLAM are timp sa publice /map.
-    # SLAM activeaza la ~5s, publica primul /map la 5-8s. La t=12s avem
-    # marja sa fim siguri ca /map exista cand global_costmap face configure.
-    costmaps = TimerAction(
+    standalone_costmaps = TimerAction(
         period=12.0,
         actions=[
-            LogInfo(msg="[bringup] Pornesc global_costmap + local_costmap (nav2)"),
+            LogInfo(msg="[bringup] Pornesc costmaps standalone (mod localization)"),
             global_costmap_node, local_costmap_node, costmap_lifecycle,
         ],
     )
@@ -215,21 +253,42 @@ def generate_launch_description():
         condition=IfCondition(follower_arg),
     )
 
-    # ── Map Explorer (doar daca harta NU exista) ──────────────────────────
-    explorer_node = Node(
-        package="human_follower",
-        executable="map_explorer",
-        name="map_explorer",
+    # ── first_scan (mapping autonom: nav2 + explore_lite + save) ──────────
+    # Folosim launch-ul din pachetul first_scan, care porneste nav2 stack
+    # complet + explore_lite + watcher de salvare. Cand watcher-ul iese,
+    # bringup-ul porneste urmarirea.
+    # save_and_exit este nodul care iese prima oara (cu rclpy.shutdown);
+    # lansam un proces dedicat ca sa-l detectam in OnProcessExit.
+    first_scan_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([FindPackageShare("first_scan"), "launch", "first_scan.launch.py"])
+        ),
+        launch_arguments={
+            "use_sim_time": use_sim_time,
+            "map_save_path": MAP_PATH,
+        }.items(),
+    )
+
+    # Detectie "first_scan terminat" prin rularea SEPARATA a save_and_exit
+    # (un duplicat al watcher-ului) cu un timeout extins — atunci cand iese,
+    # bringup-ul stie ca mapping-ul s-a terminat. Asa evitam dependinta pe
+    # un nod din interiorul launch-ului inclus.
+    sentinel_node = Node(
+        package="first_scan",
+        executable="save_and_exit",
+        name="first_scan_sentinel",
         output="screen",
         parameters=[{
             "use_sim_time": use_sim_time,
             "map_save_path": MAP_PATH,
-            "explore_duration": 180.0,    # 3 min, ajustabil
+            "done_idle_seconds":   45.0,    # un pic mai relaxat decat watcher-ul intern
+            "max_explore_seconds": 480.0,
+            "min_explore_seconds": 70.0,
         }],
     )
 
     if map_exists:
-        # HARTA EXISTA → urmarire imediat (dupa stabilizare SLAM + costmaps)
+        # HARTA EXISTA → urmarire imediat + costmaps standalone pt vizualizare
         follower_group = TimerAction(
             period=14.0,
             actions=[
@@ -237,29 +296,32 @@ def generate_launch_description():
                 dr_spaam_node, yolo_node, follower_node,
             ],
         )
-        explorer_group = []  # nimic
+        explorer_group = [standalone_costmaps]
     else:
-        # MAPPING → explorer porneste, la iesirea lui → followers
-        # 15s = SLAM activ (5s) + /map publicat + costmaps activate (12s) + marja
-        explorer_with_delay = TimerAction(
-            period=15.0,
+        # MAPPING → first_scan stack porneste (nav2 + explore_lite + watcher)
+        first_scan_delayed = TimerAction(
+            period=12.0,
             actions=[
-                LogInfo(msg="[bringup] Pornesc map_explorer (mapping autonom)"),
-                explorer_node,
+                LogInfo(msg="[bringup] Pornesc first_scan (nav2 + explore_lite)"),
+                first_scan_launch,
             ],
         )
-        # Cand explorer-ul moare (a salvat harta) → start followers
-        on_explorer_exit = RegisterEventHandler(
+        sentinel_delayed = TimerAction(
+            period=14.0,
+            actions=[sentinel_node],
+        )
+        # Cand sentinel-ul moare (a salvat harta) → start followers
+        on_sentinel_exit = RegisterEventHandler(
             OnProcessExit(
-                target_action=explorer_node,
+                target_action=sentinel_node,
                 on_exit=[
-                    LogInfo(msg="[bringup] map_explorer a iesit → pornesc urmarirea"),
+                    LogInfo(msg="[bringup] first_scan complet → pornesc urmarirea"),
                     dr_spaam_node, yolo_node, follower_node,
                 ],
             ),
         )
-        explorer_group = [explorer_with_delay, on_explorer_exit]
-        follower_group = None  # urmarirea porneste prin event handler
+        explorer_group = [first_scan_delayed, sentinel_delayed, on_sentinel_exit]
+        follower_group = None
 
     # ── RViz ──────────────────────────────────────────────────────────────
     rviz = TimerAction(
@@ -277,7 +339,7 @@ def generate_launch_description():
         ],
     )
 
-    actions = declared + [gazebo, scan_relay, slam, rviz, costmaps]
+    actions = declared + [gazebo, cmd_vel_inverter, scan_relay, slam, rviz]
     if follower_group is not None:
         actions.append(follower_group)
     actions.extend(explorer_group)

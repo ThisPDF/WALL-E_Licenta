@@ -30,6 +30,7 @@ setup(
             'delivery_manager = human_follower.delivery_manager:main',
             'scan_qos_relay = human_follower.scan_qos_relay:main',
             'map_explorer = human_follower.map_explorer:main',
+            'cmd_vel_inverter = human_follower.cmd_vel_inverter:main',
         ],
     },
 )

@@ -3,7 +3,8 @@
 delivery_manager.py
 Flow: IDLE → NAVIGATING_TO_USER → AT_USER → FOLLOWING → RETURNING_TO_BASE → IDLE
 Coordonate: world frame (offset spawn aplicat automat)
-Semn cmd_vel: negat (ca in human_follower) — fata robotului e spre Y pozitiv
+Semn cmd_vel: conventie standard ROS — linear.x>0 = inainte (base_footprint +X),
+angular.z>0 = CCW/stanga. odom raporteaza base_footprint, deci NU se negheaza nimic.
 """
 import math
 import time
@@ -31,9 +32,9 @@ SPAWN_X   = 0.0
 SPAWN_Y   = -11.2
 SPAWN_YAW = math.pi / 2  # 1.57 rad
 
-# Offset lidar față de base_link: rpy="0 0 1.5837" ≈ π/2
-# Fața robotului e spre Y pozitiv în frame-ul lui
-ROBOT_FORWARD_OFFSET = math.pi / 2
+# Fata robotului = base_footprint +X (conventie standard ROS, confirmat teleop).
+# odom raporteaza pozitia/orientarea lui base_footprint, deci robot_yaw e deja
+# yaw-ul "forward" in world frame (odom_yaw + SPAWN_YAW) — fara offset suplimentar.
 
 
 class DeliveryManager(Node):
@@ -113,8 +114,7 @@ class DeliveryManager(Node):
 
         self._log(
             f"DeliveryManager ready | server={self.server_url} | "
-            f"spawn=({SPAWN_X}, {SPAWN_Y}) yaw={math.degrees(SPAWN_YAW):.1f}° | "
-            f"forward_offset={math.degrees(ROBOT_FORWARD_OFFSET):.1f}°",
+            f"spawn=({SPAWN_X}, {SPAWN_Y}) yaw={math.degrees(SPAWN_YAW):.1f}°",
             "info"
         )
 
@@ -289,8 +289,8 @@ class DeliveryManager(Node):
         if (now - self._last_nav_log) > 1.0:
             self._last_nav_log = now
             angle_to_target = math.atan2(dy, dx)
-            # ✅ Fața robotului e spre Y pozitiv (offset π/2 față de X)
-            angle_error = angle_to_target - self.robot_yaw - ROBOT_FORWARD_OFFSET
+            # Aceeasi eroare ca in control (jos): bearing - yaw, fara offset.
+            angle_error = angle_to_target - self.robot_yaw
             while angle_error >  math.pi: angle_error -= 2 * math.pi
             while angle_error < -math.pi: angle_error += 2 * math.pi
             self.get_logger().info(
@@ -339,8 +339,11 @@ class DeliveryManager(Node):
         ang_speed = max(-self.max_angular, min(self.max_angular, self.k_ang * angle_error))
 
         twist = Twist()
-        twist.linear.x  = -lin_speed   # negat — fața robotului
-        twist.angular.z = -ang_speed   # negat — rotație inversă
+        # Conventie standard ROS (dupa fix URDF + flip wheel axes):
+        #   linear.x  > 0 → forward, angular.z > 0 → CCW
+        # NU mai inversam (era hack pentru URDF original gresit)
+        twist.linear.x  = lin_speed
+        twist.angular.z = ang_speed
         self.cmd_pub.publish(twist)
 
     # ── Server communication ───────────────────────────────────────────

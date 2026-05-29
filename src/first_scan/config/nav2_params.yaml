@@ -1,0 +1,392 @@
+# Full nav2 stack configuration pentru carucior_asamblat (Jazzy).
+# Adaptat din /opt/ros/jazzy/share/nav2_bringup/params/nav2_params.yaml
+# Modificari fata de template:
+#   - base_frame_id = base_footprint (al nostru, NU base_link)
+#   - scan topic = /scan
+#   - robot_radius = 0.35
+#   - viteze conservatoare
+#   - controller = RegulatedPurePursuit (simpler diff-drive)
+#   - NU folosim amcl (avem slam_toolbox live)
+
+bt_navigator:
+  ros__parameters:
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    wait_for_service_timeout: 1000
+    action_server_result_timeout: 900.0
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
+    error_code_names:
+      - compute_path_error_code
+      - follow_path_error_code
+
+controller_server:
+  ros__parameters:
+    controller_frequency: 10.0
+    costmap_update_timeout: 0.30
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+    # Default-uri pentru actionGoals care nu specifica explicit checker-ul
+    # (elimina warning-urile "No goal/progress checker was specified")
+    current_goal_checker: "general_goal_checker"
+    current_progress_checker: "progress_checker"
+    use_realtime_priority: false
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.2
+      # 15s — detectie mai rapida a blocajului → recovery (backup) + replan
+      # explore_lite mai devreme cand robotul lung se prinde intr-un culoar.
+      movement_time_allowance: 15.0
+    general_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.30      # 30cm pentru goal completion
+      # 3.15 = orice orientare la goal e acceptabila. Explore_lite trimite
+      # goaluri fara orientare specifica oricum, iar daca RPP incearca
+      # sa alinieze orientarea la sfarsit, ar provoca rotatie in loc =
+      # wobble + map duplicat.
+      yaw_goal_tolerance: 3.15
+
+    FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      desired_linear_vel: 0.30
+      lookahead_dist: 0.6
+      min_lookahead_dist: 0.3
+      max_lookahead_dist: 0.9
+      lookahead_time: 1.5
+      # Rotatie moderata: 0.4 rad/s. La 0.6 (default) wobble prea mare ->
+      # map duplicat. La 0.2 prea lent -> progress_checker abort.
+      # 0.4 e compromis: 4s pentru 90°, wobble tangential 0.17 m/s (SLAM OK).
+      rotate_to_heading_angular_vel: 0.4
+      transform_tolerance: 0.3
+      use_velocity_scaled_lookahead_dist: false
+      min_approach_linear_velocity: 0.05
+      approach_velocity_scaling_dist: 0.6
+      use_collision_detection: true
+      max_allowed_time_to_collision_up_to_carrot: 1.0
+      use_regulated_linear_velocity_scaling: true
+      use_fixed_curvature_lookahead: false
+      curvature_lookahead_dist: 0.25
+      use_cost_regulated_linear_velocity_scaling: false
+      regulated_linear_scaling_min_radius: 0.9
+      regulated_linear_scaling_min_speed: 0.1
+      # rotate_to_heading=FALSE: cu Smac REEDS_SHEPP, path-ul incepe deja cu
+      # un arc kinematic-fezabil. Daca rotate_to_heading=true, RPP intra in
+      # mod "rotate in place" cand heading_error > rotate_to_heading_min_angle,
+      # apoi cand crede ca s-a aliniat, porneste forward → carrot-ul (pe arc)
+      # se misca → heading_error creste din nou → RPP comuta inapoi in mod
+      # rotate → robotul face WIGGLE stanga-dreapta fara sa avanseze, pana cand
+      # progress_checker da abort. Solutie: pura urmarire de curbura (Stanley),
+      # planner-ul Smac genereaza path-ul corect, RPP doar il urmareste.
+      use_rotate_to_heading: false
+      # allow_reversing=true → RPP poate urma segmente de mers inapoi; ajuta
+      # la manevre + recovery cand robotul lung e prins intr-un culoar.
+      allow_reversing: true
+      rotate_to_heading_min_angle: 0.785
+      max_angular_accel: 1.5
+      max_robot_pose_search_dist: 5.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_footprint
+      rolling_window: true
+      width: 4
+      height: 4
+      resolution: 0.05
+      # Footprint POLIGONAL — base_footprint la mijloc roti spate, cart
+      # asimetric: x:[-0.35,0.90] (fata), y:[±0.40].
+      footprint: "[[0.90, 0.40], [0.90, -0.40], [-0.45, -0.40], [-0.45, 0.40]]"
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          # /scan_filtered = self-filter aplicat (rama caruciorului eliminata
+          # din endpoint-uri). SLAM consuma separat /scan_for_slam (nefiltrat).
+          topic: /scan_filtered
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          raytrace_max_range: 6.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 5.0
+          obstacle_min_range: 0.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        # 0.40m > robot_radius (0.35) → buffer mic in jurul obstacolelor
+        # reale. Valoarea anterioara 0.55 era prea agresiva si, combinata
+        # cu reflexii LIDAR de pe propriul carucior, inunda costmap-ul.
+        # 0.60 = robot_radius (0.55) + 5cm buffer. CRITICAL: inflation_radius
+        # trebuie >= inscribed radius (robot_radius), altfel cells "lethal"
+        # nu sunt corect inflate si planner-ul poate alege paths in coliziune.
+        inflation_radius: 0.60
+      always_send_full_costmap: true
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_footprint
+      footprint: "[[0.90, 0.40], [0.90, -0.40], [-0.45, -0.40], [-0.45, 0.40]]"
+      resolution: 0.05
+      track_unknown_space: true
+      rolling_window: false
+      # DOAR static_layer + inflation. Anterior aveam si obstacle_layer aici,
+      # dar combinatia era problematica: cand robotul rotea (spin recovery),
+      # LIDAR-ul marca obstacole in obstacle_layer global; dupa rotatie,
+      # robotul stationar → niciun raytrace care sa le curete → costmap
+      # blocat permanent cu obstacole reziduale → planner esua → mai mult
+      # spin → cerc vicios. Cu doar static_layer (harta SLAM), peretii sunt
+      # CONSISTENTI (SLAM acumuleaza scanuri intr-o harta stabila, nu se
+      # blocheaza cu rezidualuri). obstacle_layer ramane in LOCAL costmap
+      # pentru detectia live de coliziuni de catre RPP.
+      plugins: ["static_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+        map_topic: /map
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        # cost_scaling_factor mare → costul scade rapid cu distanta → centrul
+        # culoarelor are cost moderat (traversabil).
+        cost_scaling_factor: 3.0
+        # 1.0 >= circumscribed radius (0.998m). OBLIGATORIU pentru Smac Hybrid:
+        # permite verificarea rapida de coliziune pe footprint via campul de
+        # potential. Cu 0.60 < 0.998, Smac verifica footprint-ul complet la
+        # fiecare nod → planificare extrem de lenta → explore_lite expira.
+        inflation_radius: 1.0
+      always_send_full_costmap: true
+
+planner_server:
+  ros__parameters:
+    # Smac Hybrid in loc de NavFn: kinematic-aware, considera footprint-ul si
+    # raza minima de viraj, genereaza cai FEZABILE (curbe + manevre mers-inapoi
+    # cu REEDS_SHEPP) pentru robotul LUNG (base la axa spate). NavFn genera cai
+    # imposibile (viraje stranse pe care robotul lung nu le putea executa) →
+    # blocaj → odom desync → duplicat. Smac genereaza doar cai pe care robotul
+    # le poate urma efectiv.
+    expected_planner_frequency: 5.0   # Smac e mai lent decat NavFn
+    planner_plugins: ["GridBased"]
+    costmap_update_timeout: 1.0
+    GridBased:
+      plugin: "nav2_smac_planner::SmacPlannerHybrid"
+      tolerance: 0.5
+      allow_unknown: true             # esential pentru explorare
+      downsample_costmap: false
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 5.0
+      # REEDS_SHEPP = permite mers inainte SI inapoi → manevre/3-point turns
+      # pentru robotul lung in spatii stranse. (DUBIN = doar inainte.)
+      motion_model_for_search: "REEDS_SHEPP"
+      angle_quantization_bins: 72
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      # Raza minima de viraj. Robotul e lung (1.25m); 0.5m permite viraje
+      # rezonabile fara sa ceara rotatie in loc imposibila in culoare inguste.
+      minimum_turning_radius: 0.5
+      reverse_penalty: 2.0            # prefera inainte, dar permite spate
+      change_penalty: 0.15
+      non_straight_penalty: 1.2
+      cost_penalty: 2.0
+      retrospective_penalty: 0.015
+      lookup_table_size: 20.0
+      cache_obstacle_heuristic: false
+      smooth_path: true
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1.0e-10
+
+smoother_server:
+  ros__parameters:
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: True
+
+behavior_server:
+  ros__parameters:
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    # Spin TREBUIE inclus aici (BT-ul default din nav2 il cere la pornire,
+    # altfel bt_navigator esueaza la load → nav2 nu porneste deloc). Dar
+    # cu max_rotational_vel: 0.4 mai jos, daca BT chiar foloseste spin in
+    # recovery, rotatia e lenta si wobble-ul SLAM e acceptabil.
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    assisted_teleop:
+      plugin: "nav2_behaviors::AssistedTeleop"
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_footprint
+    transform_tolerance: 0.3
+    simulate_ahead_time: 2.0
+    # 0.4 (anterior 0.8) → spin recovery se invarte LENT cand BT il declanseaza.
+    # Cu base_footprint offset fata de centrul de rotatie, viteza mare face
+    # wobble SLAM-ul nu il poate compensa → harta duplicat. La 0.4 e tolerabil.
+    max_rotational_vel: 0.4
+    min_rotational_vel: 0.1
+    rotational_acc_lim: 1.0
+
+waypoint_follower:
+  ros__parameters:
+    loop_rate: 20
+    stop_on_failure: false
+    action_server_result_timeout: 900.0
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      waypoint_pause_duration: 200
+
+velocity_smoother:
+  ros__parameters:
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.4, 0.0, 1.0]
+    min_velocity: [-0.4, 0.0, -1.0]
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+    max_accel: [1.0, 0.0, 2.0]
+    max_decel: [-1.0, 0.0, -2.0]
+    odom_topic: "odom"
+    odom_duration: 0.1
+
+# Collision monitor: opreste robotul daca un obstacol intra in poligonul
+# de siguranta in fata. Necesar pentru ca nav2_bringup il porneste.
+collision_monitor:
+  ros__parameters:
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 0.3
+    source_timeout: 1.0
+    base_shift_correction: True
+    stop_pub_timeout: 2.0
+    use_realtime_priority: false
+    polygons: ["FootprintApproach"]
+    FootprintApproach:
+      type: "polygon"
+      action_type: "approach"
+      footprint_topic: "/local_costmap/published_footprint"
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      min_points: 6
+      visualize: False
+      enabled: True
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      # Folosim scan-ul filtrat ca sa nu blocam pe self-detections.
+      topic: "/scan_filtered"
+      min_height: 0.15
+      max_height: 2.0
+      enabled: True
+
+# Docking server (din pachetul opennav_docking): nu-l folosim activ dar
+# trebuie sa aiba o config minima ca sa nu pice la activare.
+docking_server:
+  ros__parameters:
+    controller_frequency: 50.0
+    initial_perception_timeout: 5.0
+    wait_charge_timeout: 5.0
+    dock_approach_timeout: 30.0
+    undock_linear_tolerance: 0.05
+    undock_angular_tolerance: 0.1
+    max_retries: 3
+    base_frame: "base_footprint"
+    fixed_frame: "odom"
+    dock_backwards: false
+    dock_prestaging_tolerance: 0.5
+    dock_plugins: ['simple_charging_dock']
+    simple_charging_dock:
+      plugin: 'opennav_docking::SimpleChargingDock'
+      docking_threshold: 0.05
+      staging_x_offset: -0.7
+      staging_yaw_offset: 0.0
+      use_external_detection_pose: false
+      use_battery_status: false
+      use_stall_detection: false
+    controller:
+      k_phi: 3.0
+      k_delta: 2.0
+      beta: 0.4
+      lambda: 2.0
+      v_linear_min: 0.1
+      v_linear_max: 0.15
+      v_angular_max: 0.75
+      slowdown_radius: 0.25
+      use_collision_detection: true
+      costmap_topic: "/local_costmap/costmap_raw"
+      footprint_topic: "/local_costmap/published_footprint"
+      transform_tolerance: 0.1
+      projection_time: 2.0
+      simulation_step: 0.1
+      dock_collision_threshold: 0.3
+      allow_reverse: false
+
+# Route server (din nav2_route): nu-l folosim, dar pentru a evita erori
+# la activare ii dam config minima.
+route_server:
+  ros__parameters:
+    base_frame: "base_footprint"
+    route_frame: "map"
+    path_density: 0.05
+    max_iterations: 0
+    max_planning_time: 2.0
+    smooth_corners: false
+    boundary_checker: "boundary_check"
+    boundary_check:
+      plugin: "nav2_route::SpatioTemporalCheck"
+    edge_cost_functions: ["DistanceScorer", "DynamicEdgesScorer"]
+    DistanceScorer:
+      plugin: "nav2_route::DistanceScorer"
+    DynamicEdgesScorer:
+      plugin: "nav2_route::DynamicEdgesScorer"
+    operations: ["AdjustSpeedLimit", "ReroutingService"]
+    AdjustSpeedLimit:
+      plugin: "nav2_route::AdjustSpeedLimit"
+    ReroutingService:
+      plugin: "nav2_route::ReroutingService"
+    graph_filepath: ""
+    graph_file_loader: "GeoJsonGraphFileLoader"
+    GeoJsonGraphFileLoader:
+      plugin: "nav2_route::GeoJsonGraphFileLoader"

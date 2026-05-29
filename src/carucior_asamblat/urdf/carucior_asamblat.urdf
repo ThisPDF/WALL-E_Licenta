@@ -1,6 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <robot name="carucior_asamblat">
 
+  <!-- ============================================================
+       FRAME CONVENTION FIX
+       Modelul CAD a fost exportat cu axa "forward" pe -Y in loc de
+       +X standard. Pentru a face nav2/slam_toolbox/etc sa-l vada cu
+       forward pe +X (conventia ROS), introducem base_footprint ca
+       root si rotim base_link cu +90deg Z. Astfel:
+         base_footprint +X = base_link -Y = robot's actual forward
+         base_footprint +Y = base_link +X = robot's actual left
+       Toate inversiunile cmd_vel din cod (follower, delivery_manager)
+       devin inutile dupa acest fix.
+       ============================================================ -->
+  <link name="base_footprint"/>
+
+  <joint name="base_footprint_to_base_link" type="fixed">
+    <!-- base_footprint = CENTRUL DE ROTATIE (mijloc roti spate motrice).
+         T_x=-0.24 pune base_footprint exact la mijloc roti spate:
+           R(π/2)*(0.51,-0.24) + (-0.24,-0.51) = (0,0) ✓
+         Astfel plugin-ul diff_drive raporteaza odom corect (fara wobble
+         rotativ). z=-0.24 pastreaza wheel bottom la sol. -->
+    <origin xyz="-0.24 -0.51 -0.24" rpy="0 0 1.5708"/>
+    <parent link="base_footprint"/>
+    <child  link="base_link"/>
+  </joint>
+
   <!-- ===================== BASE ===================== -->
   <link
     name="base_link">
@@ -68,13 +92,16 @@
           rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
       </material>
     </visual>
+    <!-- Collision = cilindru primitiv in loc de mesh STL.
+         Mesh-ul STL exportat din CAD are forma de coaja/spite si nu face
+         contact corect cu podeaua → roata se invarte in gol fara tractiune.
+         Cilindru radius=0.12 (matches <wheel_radius> in diff_drive plugin),
+         length=0.05 (latime aproximativa). Axa cilindrului = axa locala Z
+         a wheel-ului (aliniata cu axa de rotatie dupa rpy). -->
     <collision>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
+      <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh
-          filename="package://carucior_asamblat/meshes/roata_fata_stanga.STL" />
+        <cylinder radius="0.12" length="0.10"/>
       </geometry>
     </collision>
   </link>
@@ -88,8 +115,14 @@
       link="base_link" />
     <child
       link="roata_fata_stanga" />
+    <!-- Axa flipuita fata de URDF-ul exportat. Cu rotatia base_footprint
+         +π/2 + rpy-ul joint-ului, axa originala (0,0,1) ajungea sa indice
+         -Y in base_footprint → pozitiv joint velocity = wheel rolling
+         -X = robot inapoi. Cu (0,0,-1) axa ajunge la +Y → pozitiv joint
+         velocity = wheel rolling +X = robot inainte (convenția standard
+         cmd_vel.linear.x). Elimina nevoia de cmd_vel_inverter pe linear.x. -->
     <axis
-      xyz="0 0 1" />
+      xyz="0 0 -1" />
   </joint>
   <link
     name="roata_fata_dreapta">
@@ -122,12 +155,9 @@
       </material>
     </visual>
     <collision>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
+      <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh
-          filename="package://carucior_asamblat/meshes/roata_fata_dreapta.STL" />
+        <cylinder radius="0.12" length="0.10"/>
       </geometry>
     </collision>
   </link>
@@ -141,8 +171,9 @@
       link="base_link" />
     <child
       link="roata_fata_dreapta" />
+    <!-- Axa flipuita pentru consistenta cu left_front_wheel (vezi comentariul de acolo). -->
     <axis
-      xyz="0 0 -1" />
+      xyz="0 0 1" />
   </joint>
   <link
     name="roata_spate_dreapta">
@@ -175,12 +206,9 @@
       </material>
     </visual>
     <collision>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
+      <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh
-          filename="package://carucior_asamblat/meshes/roata_spate_dreapta.STL" />
+        <cylinder radius="0.12" length="0.10"/>
       </geometry>
     </collision>
   </link>
@@ -194,8 +222,11 @@
       link="base_link" />
     <child
       link="roata_spate_dreapta" />
+    <!-- Axa flipuita fata de URDF-ul exportat. Acum pozitiv joint velocity
+         = wheel rolling +X in base_footprint → cmd_vel.linear.x pozitiv
+         comanda fizic robotul inainte, fara cmd_vel_inverter. -->
     <axis
-      xyz="0 0 -1" />
+      xyz="0 0 1" />
   </joint>
   <link
     name="roata_spate_stanga">
@@ -228,12 +259,9 @@
       </material>
     </visual>
     <collision>
-      <origin
-        xyz="0 0 0"
-        rpy="0 0 0" />
+      <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh
-          filename="package://carucior_asamblat/meshes/roata_spate_stanga.STL" />
+        <cylinder radius="0.12" length="0.10"/>
       </geometry>
     </collision>
   </link>
@@ -247,8 +275,9 @@
       link="base_link" />
     <child
       link="roata_spate_stanga" />
+    <!-- Axa flipuita pentru consistenta cu right_back_wheel. -->
     <axis
-      xyz="0 0 1" />
+      xyz="0 0 -1" />
   </joint>
 
   <!-- ===================== SENSORS ===================== -->
@@ -348,13 +377,21 @@
     <mu1>1.2</mu1>
     <mu2>1.2</mu2>
   </gazebo>
+  <!-- Rotile din fata: frecare MICA (~caster). Caruciorul are 4 roti fixe
+       (fara steering joint), dar plugin-ul diff_drive comanda doar rotile
+       din spate. Cu mu mare aici, rotile din fata rezistau la alunecarea
+       laterala necesara pentru rotatie → robotul fizic se rotea mult mai
+       incet decat raporta odom-ul → harta SLAM primea cadre prea dese
+       (RViz arata "mai repede" decat fizic). Cu mu mic, rotile din fata
+       aluneca liber in orice directie (~ball-caster), back wheels fac
+       intreaga tractiune si rotatie, iar odom ↔ fizic raman sincronizate. -->
   <gazebo reference="roata_fata_dreapta">
-    <mu1>1.0</mu1>
-    <mu2>1.0</mu2>
+    <mu1>0.00</mu1>
+    <mu2>0.00</mu2>
   </gazebo>
   <gazebo reference="roata_fata_stanga">
-    <mu1>1.0</mu1>
-    <mu2>1.0</mu2>
+    <mu1>0.00</mu1>
+    <mu2>0.00</mu2>
   </gazebo>
 
   <!-- LiDAR -->
@@ -429,15 +466,25 @@
   <gazebo>
     <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
       <topic>cmd_vel</topic>
-      <odom_topic>odom</odom_topic>
+      <!-- Topic-ul Gazebo trebuie sa match-uiasca exact ce subscribe bridge-ul.
+           Bridge listens la /model/carucior_asamblat/odometry → remap → /odom. -->
+      <odom_topic>/model/carucior_asamblat/odometry</odom_topic>
       <tf_topic>/model/carucior_asamblat/tf</tf_topic>
       <frame_id>odom</frame_id>
       <child_frame_id>base_footprint</child_frame_id>
       <odom_publish_frequency>30</odom_publish_frequency>
 
-      <wheel_separation>0.55</wheel_separation>
+      <!-- Distanta REALA intre roti din spate: |0.84131 - 0.17655| = 0.66476m.
+           Cu 0.55 (valoarea anterioara), plugin-ul calcula incorect odometria
+           si raportarea unghiulara nu coincidea cu rotatia fizica. -->
+      <wheel_separation>0.66476</wheel_separation>
       <wheel_radius>0.12</wheel_radius>
 
+      <!-- Joints in ordinea originala (NU swap). Cu rotatia URDF +pi/2:
+             - left_back_wheel ajunge la base_footprint +Y (robot's left) ✓
+             - right_back_wheel ajunge la base_footprint -Y (robot's right) ✓
+           Plugin's "left/right" coincid cu lateralitate reala → angular ✓
+           Inversia linear.x e facuta de cmd_vel_inverter (nod separat). -->
       <left_joint>left_back_wheel</left_joint>
       <right_joint>right_back_wheel</right_joint>
 

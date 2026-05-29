@@ -16,7 +16,7 @@ yolo_person_tracker:
   ros__parameters:
     image_topic: /camera/rgb/image_raw
     model: /home/daniel/ros2_ws/yolov8x.pt
-    conf: 0.35
+    conf: 0.18   # actorul sim e mic in cadru (h~0.1) la 6-9m → conf pica des; prag jos ca sa prindem mai multe cadre
     iou: 0.5
     device: "0"        # e.g. "0" for CUDA:0, or "cpu"
     target_topic: /yolo_person_target

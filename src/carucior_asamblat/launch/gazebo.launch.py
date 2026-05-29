@@ -48,26 +48,17 @@ def _make_robot_description(context, *args, **kwargs):
     # (care folosesc sim time din /clock) esueaza si harta nu se publica.
     sim_time = {"use_sim_time": True}
 
-    # base_footprint -> base_link (proiectie pe sol; conventie ROS Nav/SLAM)
-    # DiffDrive publica odom -> base_footprint, deci base_footprint e parinte.
-    # base_link e in chassis, la z=+0.24 fata de sol (≈ raza roata 0.12 + offset).
-    static_tf_basefootprint = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="tf_base_footprint_to_base_link",
-        output="screen",
-        parameters=[sim_time],
-        arguments=[
-            "--x", "0", "--y", "0", "--z", "0.24",
-            "--roll", "0", "--pitch", "0", "--yaw", "0",
-            "--frame-id", "base_footprint",
-            "--child-frame-id", "base_link",
-        ],
-    )
+    # NOTA: TF base_footprint->base_link e DEFINIT IN URDF (joint fix cu
+    # rotatie +pi/2 + translatie de centrare). Nu mai pornim static
+    # transform publisher pentru asta (era fix pana cand URDF avea root pe
+    # base_link; acum URDF are root pe base_footprint).
 
     # Alias TF pentru frame-ul publicat de Gazebo pe LaserScan
     # Gazebo Sim foloseste formatul: <model>/<canonical_link>/<sensor_name>
-    # → "carucior_asamblat/base_link/lidar_sensor"
+    # Canonical link e ROOT-UL URDF-ului. DUPA fix-ul nostru, root-ul e
+    # base_footprint (nu base_link), deci frame_id devine:
+    #   "carucior_asamblat/base_footprint/lidar_sensor"
+    # NU "carucior_asamblat/base_link/lidar_sensor" cum era inainte!
     static_tf_lidar_alias = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
@@ -78,11 +69,11 @@ def _make_robot_description(context, *args, **kwargs):
             "--x", "0", "--y", "0", "--z", "0",
             "--roll", "0", "--pitch", "0", "--yaw", "0",
             "--frame-id", "lidar",
-            "--child-frame-id", "carucior_asamblat/base_link/lidar_sensor",
+            "--child-frame-id", "carucior_asamblat/base_footprint/lidar_sensor",
         ],
     )
 
-    # Acelasi pentru camera depth/rgb
+    # Acelasi pentru camera depth/rgb (canonical link = base_footprint)
     static_tf_depthcam_alias = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
@@ -93,7 +84,7 @@ def _make_robot_description(context, *args, **kwargs):
             "--x", "0", "--y", "0", "--z", "0",
             "--roll", "0", "--pitch", "0", "--yaw", "0",
             "--frame-id", "camera",
-            "--child-frame-id", "carucior_asamblat/base_link/depth_camera",
+            "--child-frame-id", "carucior_asamblat/base_footprint/depth_camera",
         ],
     )
 
@@ -107,7 +98,7 @@ def _make_robot_description(context, *args, **kwargs):
             "--x", "0", "--y", "0", "--z", "0",
             "--roll", "0", "--pitch", "0", "--yaw", "0",
             "--frame-id", "camera",
-            "--child-frame-id", "carucior_asamblat/base_link/rgb_camera",
+            "--child-frame-id", "carucior_asamblat/base_footprint/rgb_camera",
         ],
     )
 
@@ -122,10 +113,22 @@ def _make_robot_description(context, *args, **kwargs):
             "-topic", "robot_description",
             "-x", "0.0",
             "-y", "-11.2",
-            "-z", "-0.25",
+            # base_footprint este la nivelul solului (z=0 in URDF), iar
+            # roata bottom e exact la z=0 datorita joint base_footprint→
+            # base_link (z=-0.24). Asadar spawnam la z=0 (anterior era
+            # -0.25, compensand pentru ca rootul era base_link mai sus).
+            "-z", "0.0",
             "-R", "0",
             "-P", "0",
-            "-Y", "1.57",
+            # Yaw=0 → robotul priveste spre world +X. SLAM initializeaza
+            # map frame la aceeasi orientare cu base_footprint, deci
+            # map +X = world +X si map +Y = world +Y. Astfel harta din
+            # RViz coincide cu vederea de sus din Gazebo — 2D Goal Pose
+            # click-urile in RViz merg unde te astepti vizual.
+            #
+            # Anterior era yaw=1.57 (robot facing +Y), iar map era rotita
+            # 90° fata de world → click-urile pareau "in directii gresite".
+            "-Y", "0.0",
         ],
     )
 
@@ -152,6 +155,11 @@ def _make_robot_description(context, *args, **kwargs):
             "/model/carucior_asamblat/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V",
 
             # --- ROS -> Gazebo ---
+            # ATENTIE: argumentul "TOPIC@ROS]GZ" foloseste TOPIC ca nume
+            # AL TOPICULUI atat pe ROS cat si pe Gazebo. Plugin-ul din URDF
+            # asculta pe Gazebo /cmd_vel (vezi <topic>cmd_vel</topic>), deci
+            # numele in bridge trebuie sa fie /cmd_vel. Apoi remap ROS side
+            # ca bridge sa subscriba la ROS /cmd_vel_gz (output-ul inverter-ului).
             "/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist",
         ],
         remappings=[
@@ -162,13 +170,16 @@ def _make_robot_description(context, *args, **kwargs):
             ("/rgb_camera/camera_info", "/camera/rgb/camera_info"),
             ("/depth_camera", "/camera/depth/image_raw"),
             ("/depth_camera/camera_info", "/camera/depth/camera_info"),
+            # remap ROS side: bridge "vede" /cmd_vel ca fiind /cmd_vel_gz
+            # → subscribe pe ROS /cmd_vel_gz (output-ul inverter-ului),
+            # publish pe Gazebo /cmd_vel (intrarea plugin-ului diff_drive)
+            ("/cmd_vel", "/cmd_vel_gz"),
         ],
     )
 
     return [
         rsp,
         jsp,
-        static_tf_basefootprint,
         static_tf_lidar_alias,
         static_tf_depthcam_alias,
         static_tf_rgbcam_alias,

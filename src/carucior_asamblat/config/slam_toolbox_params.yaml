@@ -13,10 +13,12 @@ slam_toolbox:
     odom_frame: odom
     map_frame: map
     base_frame: base_footprint
-    # IMPORTANT: subscriere la /scan_for_slam (republicat de scan_qos_relay
-    # cu QoS Reliable+KeepLast(5), match cu default-ul slam_toolbox).
-    # Topic-ul brut /scan vine prin parameter_bridge cu QoS care nu match-uia.
-    scan_topic: /scan_for_slam
+    # /scan_filtered = scan-ul cu rama caruciorului eliminata (output-ul
+    # scan_qos_relay cu self-filter R=0.75m). Cu scan-ul brut SLAM adauga
+    # "umbra" cart-ului in harta la fiecare unghi de rotatie a robotului,
+    # poluand harta cu obstacole-fantoma. Walls/shelves/checkouts sunt la
+    # 1-12m, mult inafara razei de filtrare → SLAM are features suficiente.
+    scan_topic: /scan_filtered
     use_map_saver: true
     mode: mapping
 
@@ -49,22 +51,34 @@ slam_toolbox:
     scan_buffer_maximum_scan_distance: 10.0
     link_match_minimum_response_fine: 0.1
     link_scan_maximum_distance: 1.5
-    loop_search_maximum_distance: 3.0
-    # Loop closing OFF in timpul testarii — provoaca "snap-uri" mari ale hartii
-    # cand detecteaza ca a mai trecut prin loc. Reactiveaza dupa ce esti
-    # multumit de stabilitate.
-    do_loop_closing: false
+    # 10.0m (anterior 3.0) — magazin mare + drift acumulat din wobble-ul
+    # cart-ului face ca, la inchiderea buclei (final explorare), pozitia
+    # estimata sa fie >3m de pozitia reala. Cu 3.0 SLAM nu gasea bucla →
+    # crea harta duplicat. Cu 10.0 prinde bucla si corecteaza drift-ul.
+    loop_search_maximum_distance: 10.0
+    # Loop closing ON — esential cand robotul exploreaza mai multe minute
+    # autonom (explore_lite). Fara asta, drift-ul de odom se acumuleaza la
+    # fiecare tura si harta apare multipla / rotita. Snap-urile vizuale cand
+    # detecteaza loop sunt acceptabile in raport cu drift-ul nelimitat.
+    do_loop_closing: true
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0
     loop_match_minimum_response_coarse: 0.35
     loop_match_minimum_response_fine: 0.45
 
     # --- Correlation ---
-    correlation_search_space_dimension: 0.5
+    # Wobble cart: base_footprint face cerc de ~0.42m raza in jurul centrului
+    # fizic de rotatie (intre rotile din spate). Fereastra de cautare trebuie
+    # sa acopere acest displacement intre scanuri consecutive, altfel SLAM
+    # scan-matcher pierde matches → harta drifteaza/sare.
+    # 1.0m (anterior 0.5) → acopera wobble-ul confortabil.
+    correlation_search_space_dimension: 1.0
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1
 
-    loop_search_space_dimension: 8.0
+    # 12.0 (anterior 8.0) — fereastra de corelatie pentru loop matching
+    # marita ca sa acopere drift-ul mai mare. Trebuie >= cu raza de cautare.
+    loop_search_space_dimension: 12.0
     loop_search_space_resolution: 0.05
     loop_search_space_smear_deviation: 0.03
 

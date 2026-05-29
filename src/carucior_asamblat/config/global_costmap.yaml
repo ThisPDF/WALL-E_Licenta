@@ -6,7 +6,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_footprint
-      robot_radius: 0.35              # raza efectiva robot carucior
+      footprint: "[[0.90, 0.40], [0.90, -0.40], [-0.45, -0.40], [-0.45, 0.40]]"
       resolution: 0.05
       track_unknown_space: true
       rolling_window: false           # global = static, intins peste toata harta
@@ -23,7 +23,8 @@ global_costmap:
         enabled: true
         observation_sources: scan
         scan:
-          topic: /scan
+          # /scan_filtered = self-filter (cart-ul eliminat).
+          topic: /scan_filtered
           max_obstacle_height: 2.0
           clearing: true
           marking: true
@@ -35,7 +36,7 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0      # gradient mai pronuntat
-        inflation_radius: 0.55        # halo in jurul obstacolelor
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.70
 
       always_send_full_costmap: true

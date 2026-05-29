@@ -51,8 +51,8 @@ class YoloPersonTrackerNode(Node):
         super().__init__("yolo_person_tracker")
 
         self.declare_parameter("image_topic",         "/camera/rgb/image_raw")
-        self.declare_parameter("model",               "yolov8s.pt")
-        self.declare_parameter("conf",                0.35)
+        self.declare_parameter("model",               "yolov8x.pt")
+        self.declare_parameter("conf",                0.25)
         self.declare_parameter("iou",                 0.5)
         self.declare_parameter("device",              "")
         self.declare_parameter("target_topic",        "/yolo_person_target")
@@ -65,7 +65,7 @@ class YoloPersonTrackerNode(Node):
         # [NOU] Cat timp sa tinem minte ultima pozitie dupa pierdere (secunde)
         # In acest interval, robotul primeste inca pozitia veche → poate cauta.
         # Dupa expirare, publica h=0 → human_follower intra in SEARCH.
-        self.declare_parameter("last_seen_timeout",   1.5)   # [NOU]
+        self.declare_parameter("last_seen_timeout",   3.0)   # 1.5→3.0: republica ultima pozitie mai mult, pod peste clipirile YOLO
 
         if YOLO is None:
             self.get_logger().error("ultralytics not found. pip install ultralytics")

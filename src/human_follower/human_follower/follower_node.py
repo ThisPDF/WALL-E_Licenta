@@ -19,8 +19,12 @@ from typing import Optional, Tuple, Dict
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseArray, PointStamped, Twist
+from rclpy.duration import Duration
+from rclpy.time import Time
+from geometry_msgs.msg import PoseArray, PointStamped, PoseStamped, Twist
 from sensor_msgs.msg import LaserScan
+from tf2_ros import Buffer, TransformListener, TransformException
+import tf2_geometry_msgs  # noqa: F401  — registers do_transform_pose for PoseStamped
 
 
 # ── Utilitare ─────────────────────────────────────────────────────────────────
@@ -76,6 +80,18 @@ class HumanFollowerNode(Node):
         self.declare_parameter("lidar_detections_topic", "/human_detections")
         self.declare_parameter("yolo_target_topic",      "/yolo_person_target")
         self.declare_parameter("scan_topic",             "/scan")
+
+        # ── UWB (highest-priority sensor) ────────────────────────────────
+        # /uwb_person_pose contine pozitia oamenului in frame `map`. Cand e
+        # proaspat (< uwb_timeout), follower-ul bypasseaza FUSED/LIDAR-ONLY/
+        # YOLO-ONLY si steer-eaza direct catre el. Anti-spike via uwb_max_jump_m.
+        self.declare_parameter("uwb_pose_topic",      "/uwb_person_pose")
+        self.declare_parameter("uwb_timeout",         0.5)
+        self.declare_parameter("uwb_max_jump_m",      1.5)
+        self.declare_parameter("uwb_target_frame",    "base_footprint")
+        # Greutate scor UWB in lock-ul sticky lidar (handover smooth la pierderea UWB).
+        self.declare_parameter("lock_w_uwb",          50.0)
+        self.declare_parameter("uwb_lock_bonus_decay", 0.85)
 
         # ── Comportament ──────────────────────────────────────────────────
         self.declare_parameter("approach_distance",   0.8)
@@ -269,6 +285,13 @@ class HumanFollowerNode(Node):
         self.lock_require_yolo    = bool(self.get_parameter("lock_require_yolo").value)
         self.lock_yolo_min        = float(self.get_parameter("lock_yolo_min").value)
 
+        # UWB
+        self.uwb_timeout          = float(self.get_parameter("uwb_timeout").value)
+        self.uwb_max_jump_m       = float(self.get_parameter("uwb_max_jump_m").value)
+        self.uwb_target_frame     = str(self.get_parameter("uwb_target_frame").value)
+        self.lock_w_uwb           = float(self.get_parameter("lock_w_uwb").value)
+        self.uwb_lock_bonus_decay = float(self.get_parameter("uwb_lock_bonus_decay").value)
+
         # Obstacole
         self.obs_stop_dist    = float(self.get_parameter("obs_stop_dist").value)
         self.obs_warn_dist    = float(self.get_parameter("obs_warn_dist").value)
@@ -336,6 +359,14 @@ class HumanFollowerNode(Node):
         self.last_yolo_rejected: Optional[str] = None
         self.lidar_person_count: int = 0
 
+        # UWB: (rel_x_robot, rel_y_robot, abs_x_map, abs_y_map, timestamp)
+        self.last_uwb: Optional[Tuple[float, float, float, float, float]] = None
+        self._uwb_warned_tf = False
+
+        # TF buffer pentru a transforma /uwb_person_pose (frame=map) in base_footprint
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
         # ── [v10] Sticky lock ─────────────────────────────────────────────
         # candidat: {"x", "y", "hits", "last_seen", "yolo_bonus"}
         self._lock_candidates: Dict[int, dict] = {}
@@ -395,6 +426,11 @@ class HumanFollowerNode(Node):
             LaserScan,
             self.get_parameter("scan_topic").value,
             self.on_scan, 10
+        )
+        self.create_subscription(
+            PoseStamped,
+            self.get_parameter("uwb_pose_topic").value,
+            self.on_uwb, 10
         )
 
         timer_dt = 1.0 / max(1.0, self.control_rate_hz)
@@ -521,9 +557,19 @@ class HumanFollowerNode(Node):
         # Filtru unghi: ignora detectii prea mult in spate
         corr_ang_check = normalize_angle(raw_ang + self.lidar_angle_offset)
         if abs(corr_ang_check) > self.lidar_max_track_angle:
+            # Surface side info: candidatul respins indica DIRECTIA in care a iesit
+            # persoana din con. SEARCH ulterior va invarti SPRE direcția pierderii
+            # (last_known_side controleaza _search_dir in tranzitia FOLLOW→SEARCH).
+            # Fara asta, gate-ul era "tacut" si SEARCH spinea cu directia default
+            # (+1=CCW) chiar daca persoana iesise pe DREAPTA → pierdere completa.
+            if corr_ang_check > 0:
+                self.last_known_side = "LEFT"
+            else:
+                self.last_known_side = "RIGHT"
             self._log(
                 f"[LIDAR CB] IGNORAT — unghi {math.degrees(corr_ang_check):.1f}deg "
-                f"> max_track={math.degrees(self.lidar_max_track_angle):.0f}deg",
+                f"> max_track={math.degrees(self.lidar_max_track_angle):.0f}deg "
+                f"side={self.last_known_side}",
                 "warn"
             )
             return
@@ -596,13 +642,104 @@ class HumanFollowerNode(Node):
         # [v10] Acorda yolo_bonus candidatilor aliniati cu bbox-ul YOLO
         self._apply_yolo_bonus_to_candidates(x_norm)
 
+    # ── on_uwb — ground truth UWB, transforma map→base_footprint si cache ─
+    def on_uwb(self, msg: PoseStamped):
+        """
+        Primeste pozitia UWB a oamenului in frame `map`, o transforma in
+        `base_footprint` pentru utilizare directa de catre controller.
+        Aplica anti-spike (uwb_max_jump_m) intre frame-uri consecutive proaspete.
+
+        IMPORTANT: Folosim Time() (latest TF disponibil) in loc de msg.header.stamp.
+        Mesajul UWB are stamp=sim_time_curent dar TF buffer ramane in urma cu
+        10-30ms in executor single-threaded → extrapolation error. Latest TF e
+        suficient (staleness < 30ms, irelevanta vs precizia UWB ~5cm).
+        """
+        import tf2_geometry_msgs  # noqa: F401  — needed for do_transform_pose registration
+        from tf2_geometry_msgs import do_transform_pose
+
+        now = time.time()
+
+        # Lookup transform: base_footprint <- map, la cel mai recent moment disponibil
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                self.uwb_target_frame,
+                msg.header.frame_id,
+                Time(),  # latest available
+                timeout=Duration(seconds=0.05),
+            )
+        except TransformException as e:
+            if not self._uwb_warned_tf:
+                self._log(
+                    f"[UWB] TF {self.uwb_target_frame}←{msg.header.frame_id} "
+                    f"indisponibil ({e}) — UWB ignorat pana e gata TF",
+                    "warn"
+                )
+                self._uwb_warned_tf = True
+            return
+        self._uwb_warned_tf = False
+
+        # Aplica transform manual (do_transform_pose ia Pose nu PoseStamped)
+        transformed = do_transform_pose(msg.pose, tf)
+        rel_x = float(transformed.position.x)
+        rel_y = float(transformed.position.y)
+        abs_x = float(msg.pose.position.x)
+        abs_y = float(msg.pose.position.y)
+
+        # Anti-spike: o saritura uriasa la cadrul urmator e respinsa o data.
+        # IMPORTANT: verificam pe coords ABSOLUTE (frame map), nu RELATIVE.
+        # In rel_x/rel_y, rotatia cart-ului produce salturi mari false (ex: cart
+        # roteste 30° in 100ms → punctul ramane fix in map, dar rel sare 5m).
+        # In abs_x/abs_y, doar miscarea reala a oamenului conteaza (max ~1m/s).
+        if self.last_uwb is not None:
+            _prev_rel_x, _prev_rel_y, prev_abs_x, prev_abs_y, prev_ts = self.last_uwb
+            dt_prev = now - prev_ts
+            if dt_prev < 0.3:
+                jump = math.hypot(abs_x - prev_abs_x, abs_y - prev_abs_y)
+                if jump > self.uwb_max_jump_m:
+                    self._log(
+                        f"[UWB] SPIKE RESPINS: jump_abs={jump:.2f}m > "
+                        f"max={self.uwb_max_jump_m:.2f}m (dt={dt_prev:.3f}s)",
+                        "warn"
+                    )
+                    return
+
+        self.last_uwb = (rel_x, rel_y, abs_x, abs_y, now)
+
+        # Hint side din UWB (positiv y_rel = stanga in base_footprint).
+        if rel_y > 0.1:
+            self.last_known_side = "LEFT"
+        elif rel_y < -0.1:
+            self.last_known_side = "RIGHT"
+        else:
+            self.last_known_side = "FRONT"
+
+        # Feed loose-coupled in lock-ul lidar (handover smooth la pierderea UWB).
+        self._apply_uwb_bonus_to_candidates(rel_x, rel_y)
+
     # ═══════════════════════════════════════════════════════════════════════
     # [v10] STICKY LOCK HELPERS
     # ═══════════════════════════════════════════════════════════════════════
 
     def _candidate_score(self, c: dict) -> float:
-        """Scor = hits * w_hits + yolo_bonus * w_yolo"""
-        return c["hits"] * self.lock_w_hits + c["yolo_bonus"] * self.lock_w_yolo
+        """Scor = hits*w_hits + yolo_bonus*w_yolo + uwb_bonus*w_uwb"""
+        return (
+            c["hits"] * self.lock_w_hits
+            + c["yolo_bonus"] * self.lock_w_yolo
+            + c.get("uwb_bonus", 0.0) * self.lock_w_uwb
+        )
+
+    def _apply_uwb_bonus_to_candidates(self, ux: float, uy: float):
+        """
+        Marcheaza candidatii lidar care coincid cu pozitia UWB (in frame robot).
+        Bonusul decade per-tick — daca UWB pica, scorul revine la hits+yolo_bonus.
+        """
+        for cid, c in self._lock_candidates.items():
+            old_bonus = c.get("uwb_bonus", 0.0)
+            decayed = old_bonus * self.uwb_lock_bonus_decay
+            if math.hypot(c["x"] - ux, c["y"] - uy) < self.lock_max_dist:
+                c["uwb_bonus"] = 1.0
+            else:
+                c["uwb_bonus"] = decayed
 
     def _update_lock_candidates(self, poses, now: float):
         """Asociaza fiecare pose cu candidat existent (EMA) sau creeaza unul nou."""
@@ -649,6 +786,7 @@ class HumanFollowerNode(Node):
                     "hits":       1,
                     "last_seen":  now,
                     "yolo_bonus": 0.0,
+                    "uwb_bonus":  0.0,
                 }
                 self._log(
                     f"[LOCK] Candidat nou #{new_id} la x={px:.2f} y={py:.2f}"
@@ -960,6 +1098,8 @@ class HumanFollowerNode(Node):
                     (now - self.last_lidar[2]) <= self.target_timeout)
         yolo_ok  = (self.last_yolo is not None and
                     (now - self.last_yolo[2]) <= self.target_timeout)
+        uwb_ok   = (self.last_uwb is not None and
+                    (now - self.last_uwb[4]) <= self.uwb_timeout)
 
         current_dist = None
         if lidar_ok and self.last_lidar:
@@ -1066,7 +1206,7 @@ class HumanFollowerNode(Node):
         # ── Tranzitii stare ─────────────────────────────────────────────────
         yolo_stable_s = (now - self.yolo_since)         if self.yolo_since         else 0.0
         yolo_miss_s   = (now - self.yolo_missing_since) if self.yolo_missing_since else 0.0
-        any_sensor    = lidar_ok or yolo_ok
+        any_sensor    = lidar_ok or yolo_ok or uwb_ok
 
         if self.state in ("APPROACH", "FOLLOW"):
             if self.state == "APPROACH":
@@ -1079,7 +1219,13 @@ class HumanFollowerNode(Node):
                             self.state = "FOLLOW"
 
             elif self.state == "FOLLOW":
-                if self.yolo_missing_since is not None and yolo_miss_s >= self.follow_exit_delay:
+                # UWB e cel mai inalt-prioritate senzor; cat timp e proaspat, nu
+                # are sens sa cadem in SEARCH chiar daca YOLO+LIDAR clipesc.
+                if uwb_ok:
+                    self._flog.info(
+                        "  [TRANZITIE] YOLO/LIDAR clipesc dar UWB ok → raman in FOLLOW"
+                    )
+                elif self.yolo_missing_since is not None and yolo_miss_s >= self.follow_exit_delay:
                     if not lidar_ok:
                         # [SAFETY] Obstacol aproape => nu intra in recovery orb,
                         # treci direct in LOST. Persoana s-a ascuns dupa colt;
@@ -1276,7 +1422,7 @@ class HumanFollowerNode(Node):
             self._flog.info("  => LOST — STOP")
             return
 
-        if not lidar_ok and not yolo_ok:
+        if not lidar_ok and not yolo_ok and not uwb_ok:
             self.publish_cmd(0.0, 0.0, dt)
             self._flog.info("  => STOP (niciun senzor)")
             return
@@ -1290,6 +1436,36 @@ class HumanFollowerNode(Node):
                 )
             return lin
 
+        # ── UWB ONLY (highest priority — ground-truth pose, immune YOLO/LIDAR wobble) ──
+        # Cand /uwb_person_pose e proaspat, controllerul foloseste pozitia direct.
+        # Reuseaza _lin_from_dist + _apply_obstacle_modulation, deci obstacle-stop,
+        # panic-stop, lateral clearance, approach distance — toate raman active.
+        if uwb_ok:
+            ux, uy, _abs_x, _abs_y, _ts = self.last_uwb
+            d   = math.hypot(ux, uy)
+            ang = normalize_angle(math.atan2(uy, ux))
+            lin_raw = compute_lin_lidar(d, "UWB")
+            if lin_raw is None:
+                self.publish_cmd(0.0, 0.0, dt)
+                return
+            # Convenție metrica: y>0=stanga, ang_z>0=CCW=stanga → +k_ang*ang.
+            # (Aceeasi ca LIDAR-ONLY; YOLO foloseste -k_ang*x_norm pentru ca x_norm
+            # e in convenție imagine.)
+            ang_raw = 0.0 if abs(ang) < self.centered_threshold else self.k_ang * ang
+            lin_mod, ang_mod, hard_stop = self._apply_obstacle_modulation(
+                lin_raw, ang_raw, moving_forward=(lin_raw > 0)
+            )
+            if hard_stop:
+                self.publish_cmd(0.0, ang_mod, dt)
+                return
+            lin_out, ang_out = self.publish_cmd(lin_mod, ang_mod, dt)
+            self._flog.info(
+                f"  MOD=UWB dist={d:.3f}m ang={math.degrees(ang):.1f}deg "
+                f"lin={lin_raw:.3f}→{lin_mod:.3f} ang={ang_raw:.3f}→{ang_mod:.3f} "
+                f"CMD lin={lin_out:.3f} ang={ang_out:.3f}"
+            )
+            return
+
         # ── FUSED: LiDAR + YOLO ────────────────────────────────────────────
         if lidar_ok and yolo_ok:
             x_lidar, y_lidar, _ = self.last_lidar
@@ -1299,9 +1475,12 @@ class HumanFollowerNode(Node):
             if lin_raw is None:
                 self.publish_cmd(0.0, 0.0, dt)
                 return
-            # ang_z>0 = CCW/stanga. Detectiile dau stanga<0 (YOLO: imaginea are
-            # dreapta=+x; LIDAR: y oglindit de flip-ul X din dr_spaam, lidar montat
-            # rotit ~180°). Negam ca sa rotim SPRE persoana (conventie standard ROS).
+            # ang_z>0 = CCW = stanga. YOLO x_norm e convenție IMAGINE: +x = dreapta
+            # imagine = dreapta robotului → ang_z = -k_ang*x_norm (CCW spre stanga
+            # cand persoana e in stanga imaginii). Aceasta negatie e LEGATA STRICT
+            # de YOLO (nu de lidar). NU cuplati cu ramura LIDAR-ONLY de mai jos —
+            # lidar foloseste atan2(y,x) cu y direct in convenție ROS (cu
+            # params.yaml: flip_x_axis: false, dr_spaam_detector_node.py:380).
             ang_raw = 0.0 if abs(x_norm) < self.centered_threshold else -self.k_ang * x_norm
             lin_mod, ang_mod, hard_stop = self._apply_obstacle_modulation(
                 lin_raw, ang_raw, moving_forward=(lin_raw > 0)
@@ -1326,9 +1505,13 @@ class HumanFollowerNode(Node):
             if lin_raw is None:
                 self.publish_cmd(0.0, 0.0, dt)
                 return
-            # Negam: /human_detections are y oglindit (dr_spaam flip X pe lidar
-            # montat ~180°), deci stanga reala apare cu ang<0. Vezi ramura FUSED.
-            ang_raw = 0.0 if abs(ang) < self.centered_threshold else -self.k_ang * ang
+            # ang_z>0 = CCW = stanga. atan2(y,x) cu y>0 (LIDAR_legs stanga) → ang>0,
+            # deci rotim direct cu +k_ang*ang (NU negam — flip_x_axis=false in
+            # params.yaml, deci y este in convenție ROS standard, NU oglindit).
+            # Bug istoric (pre-2026-05-30): aceasta linie avea -k_ang*ang, ceea ce
+            # facea cart-ul sa se invarta SPRE DREAPTA cand persoana era la stanga
+            # → pierdea ținta peste pragul de 60deg din on_lidar.
+            ang_raw = 0.0 if abs(ang) < self.centered_threshold else self.k_ang * ang
             # [v11] Cap pe LIDAR-ONLY ang: cand YOLO clipeste, candidatul lidar
             # poate fi driftat sau in dezacord cu YOLO → un steer max ar biciui
             # robotul si l-ar arunca din traiectorie. Steer gentil pana revine YOLO.

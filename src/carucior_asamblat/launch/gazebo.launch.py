@@ -73,6 +73,21 @@ def _make_robot_description(context, *args, **kwargs):
         ],
     )
 
+    # Alias TF pentru lidar_legs (DR-SPAAM). Acelasi pattern ca lidar-ul de sus.
+    static_tf_lidar_legs_alias = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="tf_lidar_legs_alias",
+        output="screen",
+        parameters=[sim_time],
+        arguments=[
+            "--x", "0", "--y", "0", "--z", "0",
+            "--roll", "0", "--pitch", "0", "--yaw", "0",
+            "--frame-id", "lidar_legs",
+            "--child-frame-id", "carucior_asamblat/base_footprint/lidar_legs_sensor",
+        ],
+    )
+
     # Acelasi pentru camera depth/rgb (canonical link = base_footprint)
     static_tf_depthcam_alias = Node(
         package="tf2_ros",
@@ -143,6 +158,7 @@ def _make_robot_description(context, *args, **kwargs):
             # --- Gazebo -> ROS ---
             "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
             "/lidar@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
+            "/lidar_legs@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
 
             "/rgb_camera@sensor_msgs/msg/Image[gz.msgs.Image",
             "/rgb_camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo",
@@ -154,6 +170,12 @@ def _make_robot_description(context, *args, **kwargs):
             # TF de la DiffDrive (odom -> base_link)
             "/model/carucior_asamblat/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V",
 
+            # Pozele DINAMICE ale tuturor entitatilor din world — folosit de
+            # uwb_pose_publisher pentru a extrage pozitia actorului (human_94763).
+            # NU se remap-eaza la /tf (ar polua arborele global). Ramane pe
+            # /gz/person_tf si e consumat doar de UWB publisher.
+            "/world/carucior_world/dynamic_pose/info@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V",
+
             # --- ROS -> Gazebo ---
             # ATENTIE: argumentul "TOPIC@ROS]GZ" foloseste TOPIC ca nume
             # AL TOPICULUI atat pe ROS cat si pe Gazebo. Plugin-ul din URDF
@@ -164,6 +186,8 @@ def _make_robot_description(context, *args, **kwargs):
         ],
         remappings=[
             ("/lidar", "/scan"),
+            ("/lidar_legs", "/scan_legs"),
+            ("/world/carucior_world/dynamic_pose/info", "/gz/person_tf"),
             ("/model/carucior_asamblat/odometry", "/odom"),
             ("/model/carucior_asamblat/tf", "/tf"),
             ("/rgb_camera", "/camera/rgb/image_raw"),
@@ -181,6 +205,7 @@ def _make_robot_description(context, *args, **kwargs):
         rsp,
         jsp,
         static_tf_lidar_alias,
+        static_tf_lidar_legs_alias,
         static_tf_depthcam_alias,
         static_tf_rgbcam_alias,
         bridge,

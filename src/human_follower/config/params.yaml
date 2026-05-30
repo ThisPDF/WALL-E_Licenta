@@ -1,8 +1,15 @@
 dr_spaam_detector:
   ros__parameters:
-    self_filter_radius: 1.0
-    self_filter_x_offset: 0.5
-    scan_topic: /scan
+    # /scan_legs_filtered = /scan_legs mascat cu harta SLAM (scan_map_filter).
+    # Razele care lovesc pereti cunoscuti / colturi de raft / in afara hartii
+    # sunt setate la inf, deci DR-SPAAM nu le mai confunda cu picioare.
+    scan_topic: /scan_legs_filtered
+    flip_x_axis: false
+    # Senzorul e la base_footprint (0.55, 0, 0.30). In frame-ul lidar, cartul
+    # se intinde de la x≈-0.55 (back wheels) la x≈+0.30 (front wheels), latime
+    # ±0.33m. Cerc centrat la x_offset=-0.15 cu r=0.55 acopera corpul cartului.
+    self_filter_radius: 0.55
+    self_filter_x_offset: -0.15
     detections_topic: /human_detections
     rviz_topic: /human_detections_marker
     weight_file: /home/daniel/ros2_ws/src/human_follower/ckpt_jrdb_ann_ft_drow3_e40.pth  # path to DR-SPAAM weights (.pth)
@@ -11,6 +18,114 @@ dr_spaam_detector:
     detector_model: DROW3  # 'DROW3' or 'DR-SPAAM'
     panoramic_scan: false
     use_gpu: true
+
+    # ── Filtru post-detectie pe harta SLAM ───────────────────────────
+    # Proiecteaza fiecare detectie (x,y) in frame `map` si o arunca daca
+    # cade pe celula OCCUPIED / UNKNOWN / OUT-OF-MAP. Defense-in-depth in
+    # plus fata de scan_map_filter — chiar daca DR-SPAAM produce un centroid
+    # de "om" pe un colt de raft, nu mai e publicat → follower nu se ancoreaza.
+    map_filter_enabled: true
+    map_topic: /map
+    map_frame: map
+    map_occupied_threshold: 50
+    # Inflatie 3 celule ≈ 15cm la 0.05m/celula. Mai larg decat scan_map_filter
+    # pentru ca aici filtram centroide, nu razele; centroidul unei detectii
+    # false-positive pe perete poate fi la cativa cm in fata peretelui.
+    map_inflation_cells: 3
+    map_filter_unknown: true
+    map_filter_out_of_map: true
+    map_tf_lookup_timeout: 0.05
+
+scan_map_filter:
+  ros__parameters:
+    input_topic: /scan_legs
+    output_topic: /scan_legs_filtered
+    map_topic: /map
+    map_frame: map
+    # Pragul de la care o celula occupancy e tratata ca "perete". Default 50.
+    occupied_threshold: 50
+    # Inflatie celule OCCUPIED+UNKNOWN. La rezolutie ~0.05m harta, 2 celule
+    # ≈ 10cm, suficient ca sa absoarba drift TF + zgomot lidar.
+    inflation_cells: 2
+    filter_unknown: true
+    filter_out_of_map: true
+    # Pana primim harta sau TF e gata, pasam scan-ul brut → DR-SPAAM ramane
+    # functional (chiar daca cu mai multe false positives).
+    passthrough_if_no_map: true
+    tf_lookup_timeout: 0.05
+
+uwb_pose_publisher:
+  ros__parameters:
+    # ── Mod operare ──────────────────────────────────────────────────────
+    # 'waypoints' (DEFAULT SIM): interpoleaza pe sim_time waypoint-urile
+    #   declarate in worlds/world.sdf:215-251 pentru actorul human_94763.
+    #   Determinist, sincronizat exact cu animatia Gazebo. Independent de
+    #   bridge-ul gz, care PIERDE numele entitatilor (gz.msgs.Pose_V.name nu
+    #   se mapeaza la TFMessage.child_frame_id) si in plus nu vede deloc
+    #   actori cu animation script.
+    # 'tf_topic' (PENTRU TAG UWB REAL): asculta TFMessage si filtreaza pe nume.
+    mode: waypoints
+
+    output_topic: /uwb_person_pose
+    output_frame: map               # map ≡ world in acest proiect
+    publish_rate_hz: 10.0
+
+    # Zgomot Gaussian peste pozitie — mimica UWB phone-class (~5cm).
+    # Set 0.0 pentru bring-up cu ground truth pur.
+    noise_sigma_xy: 0.05
+    noise_sigma_yaw: 0.0
+    dropout_probability: 0.0
+
+    # ── Mode waypoints params ────────────────────────────────────────────
+    # CSV "t1,x1,y1,yaw1;t2,x2,y2,yaw2;...". Default = scriptul actorului
+    # din world.sdf:215-251. Sincronizat cu sim_time (use_sim_time=true).
+    waypoints_csv: "0.0,5.0,-10.6,0.0;21.0,12.5,-11.2,3.13;70.0,12.5,8.5,0.0;87.0,5.6,8.5,-0.0055;117.0,5.6,-3.19,-1.4998;152.0,-8.5,-4.2,0.0;165.0,-8.2,-9.2,0.0"
+    loop_trajectory: true
+    clock_offset_sec: 0.0
+    # Offset world → map frame. Cart spawned la gazebo.launch.py:130 cu -y -11.2,
+    # iar slam_toolbox initializeaza /map cu base_footprint la (0,0). Deci
+    # map_y = world_y + 11.2. Daca schimbi spawn-ul, recalculeaza acest offset.
+    # Validare prin extents harta SLAM: world y∈[-12,12] ↔ map y∈[-0.78, 23.22].
+    world_to_map_offset_x: 0.0
+    world_to_map_offset_y: 11.2
+    world_to_map_offset_yaw: 0.0
+
+    # ── Mode tf_topic params (nefolosit cand mode=waypoints) ─────────────
+    actor_name: human_94763
+    input_tf_topic: /gz/person_tf
+    stale_warn_sec: 2.0
+
+human_follower:
+  ros__parameters:
+    # ── UWB (highest-priority sensor) ────────────────────────────────────
+    # Cand /uwb_person_pose e proaspat, controllerul foloseste DIRECT pozitia
+    # raportata pentru steering (bypass FUSED/LIDAR-ONLY/YOLO-ONLY). Daca UWB
+    # tace > uwb_timeout secunde, follower-ul cade gradual pe FUSED/LIDAR/YOLO.
+    # UWB feed-uieste si lock-ul lidar prin lock_w_uwb pentru handover smooth
+    # cand UWB pica.
+    uwb_pose_topic: /uwb_person_pose
+    uwb_timeout: 0.5
+    uwb_max_jump_m: 1.5
+    lock_w_uwb: 50.0
+    uwb_lock_bonus_decay: 0.85
+
+    # ── Sectiune critica pentru convenția semnelor steering ─────────────
+    # Acești parametri trebuie să corespundă cu dr_spaam_detector:flip_x_axis
+    # de mai sus și cu invert_angular_z din cmd_vel_inverter (bringup.launch.py).
+    #
+    # Convenția actuală (2026-05-30, dupa fix bug LIDAR-ONLY sign):
+    #   - flip_x_axis: false → detectiile au y in convenție ROS (y>0 = stanga)
+    #   - cmd_vel ang_z>0 = CCW = stanga (publicat direct la Gazebo, fara inversare)
+    #   - In FOLLOW LIDAR-ONLY: ang_raw = +k_ang * atan2(y,x) (NU negam — bug pre-fix)
+    #   - In FOLLOW FUSED:      ang_raw = -k_ang * x_norm     (YOLO: imagine right=+x)
+    # Daca cineva schimba flip_x_axis, recheck follower_node.py:1331.
+
+    # Gate-ul pentru detectii prea laterale. Default 60° era prea ingust:
+    # persoana care merge lateral (side-pass) sau cart-ul care se rotește chiar
+    # putin scoatea candidatul din con → SEARCH spinea cu directie default si
+    # pierdea ținta. 90° lasa mai mult margine. Cu map filter + sticky lock,
+    # riscul de a prinde un perete in spatiu lateral e mic.
+    lidar_max_track_angle: 90.0
 
 yolo_person_tracker:
   ros__parameters:
@@ -23,3 +138,10 @@ yolo_person_tracker:
     publish_debug_image: true
     debug_image_topic: /yolo_person_debug
     log_every_n: 30
+    # Camera RGB din URDF (carucior_asamblat.urdf:499-516) nu are <pose>
+    # override (depth_camera la urdf:481 are). Imaginea ajunge oglindita
+    # stanga-dreapta → fara flip, YOLO publica x_norm cu semn inversat
+    # fata de robot (persoana stanga → DREAPTA in image → x_norm>0 →
+    # follower rotește GREȘIT). horizontal_flip=true re-alinieaza inainte
+    # de inferenta. Pentru cameră reală cu mount corect, set false.
+    horizontal_flip: true

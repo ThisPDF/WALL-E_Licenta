@@ -227,6 +227,33 @@ def generate_launch_description():
         ],
     )
 
+    # ── scan_map_filter — mascheaza /scan_legs cu harta SLAM ──────────────
+    # Trimite la DR-SPAAM doar razele care NU lovesc pereti cunoscuti din harta.
+    # Functional doar in modul localization (harta deja incarcata). In mapping
+    # n-ar avea harta de unde sa filtreze, deci nu il pornim acolo.
+    scan_map_filter_node = Node(
+        package="human_follower",
+        executable="scan_map_filter",
+        name="scan_map_filter",
+        output="screen",
+        parameters=[hf_params, {"use_sim_time": use_sim_time}],
+        condition=IfCondition(follower_arg),
+    )
+
+    # ── uwb_pose_publisher — UWB simulator pe actor Gazebo ────────────────
+    # Extrage pozitia ground-truth a actorului din /gz/person_tf (bridged
+    # din /world/carucior_world/dynamic_pose/info), adauga zgomot Gaussian
+    # configurabil si publica PoseStamped pe /uwb_person_pose. Follower-ul il
+    # foloseste ca senzor de cea mai mare prioritate, bypassand YOLO/LIDAR.
+    uwb_node = Node(
+        package="human_follower",
+        executable="uwb_pose_publisher",
+        name="uwb_pose_publisher",
+        output="screen",
+        parameters=[hf_params, {"use_sim_time": use_sim_time}],
+        condition=IfCondition(follower_arg),
+    )
+
     # ── DR-SPAAM / YOLO / human_follower ──────────────────────────────────
     dr_spaam_node = Node(
         package="human_follower",
@@ -293,7 +320,7 @@ def generate_launch_description():
             period=14.0,
             actions=[
                 LogInfo(msg="[bringup] Harta incarcata → pornesc urmarirea"),
-                dr_spaam_node, yolo_node, follower_node,
+                scan_map_filter_node, uwb_node, dr_spaam_node, yolo_node, follower_node,
             ],
         )
         explorer_group = [standalone_costmaps]
@@ -316,7 +343,7 @@ def generate_launch_description():
                 target_action=sentinel_node,
                 on_exit=[
                     LogInfo(msg="[bringup] first_scan complet → pornesc urmarirea"),
-                    dr_spaam_node, yolo_node, follower_node,
+                    scan_map_filter_node, uwb_node, dr_spaam_node, yolo_node, follower_node,
                 ],
             ),
         )

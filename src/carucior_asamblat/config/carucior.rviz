@@ -14,6 +14,7 @@ Panels:
 Visualization Manager:
   Class: ""
   Displays:
+    # ── Referinta vizuala ──────────────────────────────────────────
     - Class: rviz_default_plugins/Grid
       Name: Grid
       Enabled: true
@@ -27,8 +28,8 @@ Visualization Manager:
       Enabled: true
       Show Names: true
       Show Axes: true
-      Show Arrows: true
-      Marker Scale: 1
+      Show Arrows: false
+      Marker Scale: 0.5
       Frame Timeout: 15
 
     - Class: rviz_default_plugins/RobotModel
@@ -43,19 +44,7 @@ Visualization Manager:
       Visual Enabled: true
       Collision Enabled: false
 
-    - Class: rviz_default_plugins/LaserScan
-      Name: LaserScan
-      Enabled: true
-      Topic:
-        Value: /scan
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-      Size (m): 0.03
-      Color: 255; 255; 0
-      Style: Points
-
+    # ── Harta SLAM ─────────────────────────────────────────────────
     - Class: rviz_default_plugins/Map
       Name: SLAM Map
       Enabled: true
@@ -68,30 +57,50 @@ Visualization Manager:
       Color Scheme: map
       Alpha: 0.7
 
-    - Class: rviz_default_plugins/Map
-      Name: Global Costmap
+    # ── LiDAR-uri ──────────────────────────────────────────────────
+    # Top lidar (z≈1.3m): pentru SLAM/nav. Galben, mic.
+    - Class: rviz_default_plugins/LaserScan
+      Name: LaserScan (top /scan)
       Enabled: true
       Topic:
-        Value: /global_costmap/costmap
+        Value: /scan
         Depth: 5
-        Durability Policy: Transient Local
+        Durability Policy: Volatile
         History Policy: Keep Last
-        Reliability Policy: Reliable
-      Color Scheme: costmap   # gradient albastru (liber) -> rosu (occupied)
-      Alpha: 0.5
+        Reliability Policy: Best Effort
+      Size (m): 0.02
+      Color: 200; 200; 0
+      Style: Points
 
-    - Class: rviz_default_plugins/Map
-      Name: Local Costmap
+    # Leg lidar (raw): vezi ce primeste filtrul. Gri, mic.
+    - Class: rviz_default_plugins/LaserScan
+      Name: LaserScan (legs raw)
+      Enabled: false
+      Topic:
+        Value: /scan_legs
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+      Size (m): 0.02
+      Color: 140; 140; 140
+      Style: Points
+
+    # Leg lidar (filtered): ce ajunge la DR-SPAAM. Verde, mai vizibil.
+    - Class: rviz_default_plugins/LaserScan
+      Name: LaserScan (legs filtered)
       Enabled: true
       Topic:
-        Value: /local_costmap/costmap
+        Value: /scan_legs_filtered
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-      Color Scheme: costmap
-      Alpha: 0.6
+      Size (m): 0.04
+      Color: 0; 255; 80
+      Style: Points
 
+    # ── Detectii oameni ────────────────────────────────────────────
     - Class: rviz_default_plugins/Marker
       Name: DR-SPAAM Detections
       Enabled: true
@@ -104,6 +113,7 @@ Visualization Manager:
       Namespaces:
         dr_spaam_ros2: true
 
+    # ── Odometrie + telemetrie ─────────────────────────────────────
     - Class: rviz_default_plugins/Odometry
       Name: Odometry
       Enabled: true
@@ -125,21 +135,12 @@ Visualization Manager:
         Shaft Radius: 0.04
         Value: Arrow
 
+    # ── Camera (YOLO debug) ────────────────────────────────────────
     - Class: rviz_default_plugins/Image
       Name: YOLO Debug
       Enabled: true
       Topic:
         Value: /yolo_person_debug
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Best Effort
-
-    - Class: rviz_default_plugins/Image
-      Name: RGB Camera
-      Enabled: false
-      Topic:
-        Value: /camera/rgb/image_raw
         Depth: 5
         Durability Policy: Volatile
         History Policy: Keep Last

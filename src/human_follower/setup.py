@@ -29,6 +29,8 @@ setup(
             'human_follower = human_follower.follower_node:main',
             'delivery_manager = human_follower.delivery_manager:main',
             'scan_qos_relay = human_follower.scan_qos_relay:main',
+            'scan_map_filter = human_follower.scan_map_filter:main',
+            'uwb_pose_publisher = human_follower.uwb_pose_publisher:main',
             'map_explorer = human_follower.map_explorer:main',
             'cmd_vel_inverter = human_follower.cmd_vel_inverter:main',
         ],

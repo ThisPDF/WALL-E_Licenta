@@ -67,6 +67,16 @@ class YoloPersonTrackerNode(Node):
         # Dupa expirare, publica h=0 → human_follower intra in SEARCH.
         self.declare_parameter("last_seen_timeout",   3.0)   # 1.5→3.0: republica ultima pozitie mai mult, pod peste clipirile YOLO
 
+        # [FIX 2026-05-30] Camera RGB din URDF (rgb_camera la urdf:499-516) NU are
+        # <pose> override (depth_camera la urdf:481 are). Rezultatul: imaginea RGB
+        # publicata pe /camera/rgb/image_raw este oglindita stanga-dreapta fata de
+        # convenția robot (persoana fizic pe STANGA cart-ului apare pe DREAPTA in
+        # imagine). Acest flip pe orizontala re-alinieaza imaginea inainte de YOLO,
+        # deci toate calculele downstream (cx, x_norm, bbox-uri din debug image,
+        # follower) sunt automat in convenție standard image-right = robot-right.
+        # Pentru cameră reală cu mount corect, seteaza horizontal_flip: false.
+        self.declare_parameter("horizontal_flip", True)
+
         if YOLO is None:
             self.get_logger().error("ultralytics not found. pip install ultralytics")
             raise RuntimeError("Missing dependency: ultralytics")
@@ -88,6 +98,7 @@ class YoloPersonTrackerNode(Node):
         self.last_seen_timeout  = float(self.get_parameter("last_seen_timeout").value)
         self.publish_debug_image = bool(self.get_parameter("publish_debug_image").value)
         self.debug_image_topic  = str(self.get_parameter("debug_image_topic").value)
+        self.horizontal_flip    = bool(self.get_parameter("horizontal_flip").value)
 
         self._frame_i = 0
 
@@ -167,6 +178,11 @@ class YoloPersonTrackerNode(Node):
             self.get_logger().warn(f"cv_bridge failed: {e}")
             self._publish_fallback(msg.header, now)
             return
+
+        # Compenseaza camera mount din URDF (rgb_camera fara <pose> override).
+        # Vezi comentariul la declare_parameter("horizontal_flip", ...).
+        if self.horizontal_flip and cv2 is not None:
+            frame = cv2.flip(frame, 1)
 
         # ── Run YOLO ─────────────────────────────────────────────────────
         try:

@@ -28,6 +28,7 @@ setup(
             'yolo_person_tracker = human_follower.yolo_tracker_node:main',
             'human_follower = human_follower.follower_node:main',
             'delivery_manager = human_follower.delivery_manager:main',
+            'map_uploader = human_follower.map_uploader:main',
             'scan_qos_relay = human_follower.scan_qos_relay:main',
             'scan_map_filter = human_follower.scan_map_filter:main',
             'uwb_pose_publisher = human_follower.uwb_pose_publisher:main',

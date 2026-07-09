@@ -20,17 +20,23 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
+from rclpy.action import ActionClient
+from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
+from nav2_msgs.action import NavigateToPose
 
 TARGET_FILE = "/tmp/delivery_target.json"
 STOP_FILE   = "/tmp/delivery_stop.json"
 
-# Offset spawn din launch file: -x 0 -y -11.2 -Y 1.57
+# Offset spawn din gazebo.launch.py: -x 0 -y -11.2 -Y 0
+# IMPORTANT: cart-ul se spawneaza cu YAW=0 (gazebo.launch.py:138), nu 1.57.
+# SLAM aliniaza map frame cu base_footprint → map +X = world +X, map +Y = world +Y
+# (pura translatie, fara rotatie). Un SPAWN_YAW=pi/2 vechi rotea pozitia raportata
+# cu 90° → robotul aparea rotit pe harta din app. Corect = 0.
 SPAWN_X   = 0.0
 SPAWN_Y   = -11.2
-SPAWN_YAW = math.pi / 2  # 1.57 rad
+SPAWN_YAW = 0.0
 
 # Fata robotului = base_footprint +X (conventie standard ROS, confirmat teleop).
 # odom raporteaza pozitia/orientarea lui base_footprint, deci robot_yaw e deja
@@ -52,6 +58,12 @@ class DeliveryManager(Node):
         self.declare_parameter("arrival_distance",        0.6)
         self.declare_parameter("robot_id",                "robot_001")
         self.declare_parameter("status_publish_interval", 1.0)
+        # Nav2 planeaza in frame `map`. Tinta vine in world; map = world + offset.
+        # Validat (vezi uwb_pose_publisher): offset (0, 11.2), yaw 0.
+        self.declare_parameter("goal_frame",              "map")
+        self.declare_parameter("world_to_map_offset_x",   0.0)
+        self.declare_parameter("world_to_map_offset_y",   11.2)
+        self.declare_parameter("nav_action",              "navigate_to_pose")
         self.declare_parameter("log_file",                "~/delivery_logs/manager.log")
         self.declare_parameter("log_file_max_bytes",      5_000_000)
         self.declare_parameter("log_file_backup_count",   3)
@@ -67,6 +79,10 @@ class DeliveryManager(Node):
         self.arrival_distance = float(self.get_parameter("arrival_distance").value)
         self.robot_id         = str(self.get_parameter("robot_id").value)
         self.status_interval  = float(self.get_parameter("status_publish_interval").value)
+        self.goal_frame       = str(self.get_parameter("goal_frame").value)
+        self.map_off_x        = float(self.get_parameter("world_to_map_offset_x").value)
+        self.map_off_y        = float(self.get_parameter("world_to_map_offset_y").value)
+        self.nav_action       = str(self.get_parameter("nav_action").value)
 
         # Logging
         log_path = os.path.expanduser(str(self.get_parameter("log_file").value))
@@ -103,6 +119,12 @@ class DeliveryManager(Node):
         self.last_stop_timestamp    = 0
         self._last_odom_log         = 0.0
         self._last_nav_log          = 0.0
+
+        # Nav2 navigare prin actiune NavigateToPose
+        self.nav_client = ActionClient(self, NavigateToPose, self.nav_action)
+        self._nav_active     = False   # exista un goal in curs
+        self._nav_succeeded  = False   # ultimul goal a reusit
+        self._goal_handle    = None
 
         # ROS
         self.cmd_pub = self.create_publisher(Twist, self.cmd_vel_topic, 10)
@@ -234,6 +256,7 @@ class DeliveryManager(Node):
             f"[STATE] NAVIGATING_TO_USER → world=({tx:.3f}, {ty:.3f})",
             "info"
         )
+        self._send_nav_goal(tx, ty)
 
     def _return_to_base(self):
         if self.human_follower_process is not None:
@@ -245,6 +268,67 @@ class DeliveryManager(Node):
             f"[STATE] RETURNING_TO_BASE → world=({SPAWN_X}, {SPAWN_Y})",
             "info"
         )
+        self._send_nav_goal(SPAWN_X, SPAWN_Y)
+
+    # ── Nav2 ────────────────────────────────────────────────────────────
+
+    def _send_nav_goal(self, world_x: float, world_y: float):
+        """Trimite o tinta NavigateToPose la Nav2 (in frame `map`)."""
+        # Reset starea ÎNAINTE de orice (nu mosteni rezultatul goal-ului anterior).
+        self._nav_active    = True
+        self._nav_succeeded = False
+
+        if not self.nav_client.wait_for_server(timeout_sec=5.0):
+            self._log("[NAV2] ❌ action server indisponibil (Nav2 pornit?)", "error")
+            self._nav_active = False
+            return
+
+        mx = world_x + self.map_off_x
+        my = world_y + self.map_off_y
+
+        goal = NavigateToPose.Goal()
+        goal.pose.header.frame_id = self.goal_frame
+        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.pose.position.x = mx
+        goal.pose.pose.position.y = my
+        goal.pose.pose.orientation.w = 1.0   # yaw 0 in `map` (orientarea finala nu e critica)
+
+        self._log(
+            f"[NAV2] → goal map=({mx:.3f}, {my:.3f}) (world=({world_x:.3f}, {world_y:.3f}))",
+            "info"
+        )
+        send_future = self.nav_client.send_goal_async(goal)
+        send_future.add_done_callback(self._on_goal_response)
+
+    def _on_goal_response(self, future):
+        try:
+            handle = future.result()
+        except Exception as e:
+            self._log(f"[NAV2] eroare send_goal: {e}", "error")
+            self._nav_active = False
+            return
+        if not handle.accepted:
+            self._log("[NAV2] ⚠️ goal RESPINS de Nav2", "warn")
+            self._nav_active = False
+            return
+        self._goal_handle = handle
+        handle.get_result_async().add_done_callback(self._on_goal_result)
+
+    def _on_goal_result(self, future):
+        # status 4 = SUCCEEDED (action_msgs/GoalStatus)
+        try:
+            status = future.result().status
+        except Exception as e:
+            self._log(f"[NAV2] eroare result: {e}", "error")
+            status = -1
+        self._nav_active = False
+        self._goal_handle = None
+        if status == 4:
+            self._nav_succeeded = True
+            self._log("[NAV2] ✅ goal atins", "info")
+        else:
+            self._nav_succeeded = False
+            self._log(f"[NAV2] goal terminat fara succes (status={status})", "warn")
 
     # ── Control loop ───────────────────────────────────────────────────
 
@@ -253,8 +337,18 @@ class DeliveryManager(Node):
             pass
 
         elif self.state == "NAVIGATING_TO_USER":
-            self._navigate_to_target()
             self._publish_status_to_server()
+            if not self._nav_active:
+                if self._nav_succeeded:
+                    self._log(
+                        f"[ARRIVAL] 🎯 Ajuns la user! "
+                        f"world=({self.robot_x:.3f}, {self.robot_y:.3f})", "info")
+                    self.state = "AT_USER"
+                else:
+                    self._log("[NAV2] navigare esuata → IDLE", "warn")
+                    self.state    = "IDLE"
+                    self.target_x = None
+                    self.target_y = None
 
         elif self.state == "AT_USER":
             if self.human_follower_process is None:
@@ -270,81 +364,21 @@ class DeliveryManager(Node):
                     self.human_follower_process = None
 
         elif self.state == "RETURNING_TO_BASE":
-            self._navigate_to_target()
             self._publish_status_to_server()
-
-    # ── Navigation ─────────────────────────────────────────────────────
-
-    def _navigate_to_target(self):
-        if self.target_x is None or self.target_y is None:
-            self.cmd_pub.publish(Twist())
-            return
-
-        dx = self.target_x - self.robot_x
-        dy = self.target_y - self.robot_y
-        distance = math.hypot(dx, dy)
-
-        # Log la fiecare secundă
-        now = time.time()
-        if (now - self._last_nav_log) > 1.0:
-            self._last_nav_log = now
-            angle_to_target = math.atan2(dy, dx)
-            # Aceeasi eroare ca in control (jos): bearing - yaw, fara offset.
-            angle_error = angle_to_target - self.robot_yaw
-            while angle_error >  math.pi: angle_error -= 2 * math.pi
-            while angle_error < -math.pi: angle_error += 2 * math.pi
-            self.get_logger().info(
-                f"[NAV] world=({self.robot_x:.3f}, {self.robot_y:.3f}) "
-                f"→ ({self.target_x:.3f}, {self.target_y:.3f}) "
-                f"dist={distance:.3f}m "
-                f"yaw={math.degrees(self.robot_yaw):.1f}° "
-                f"err={math.degrees(angle_error):.1f}°"
-            )
-
-        if distance < self.arrival_distance:
-            self.cmd_pub.publish(Twist())
-
-            if self.state == "NAVIGATING_TO_USER":
-                self._log(
-                    f"[ARRIVAL] 🎯 Ajuns la user! "
-                    f"world=({self.robot_x:.3f}, {self.robot_y:.3f}) "
-                    f"dist_finala={distance:.3f}m",
-                    "info"
-                )
-                self.state = "AT_USER"
-
-            elif self.state == "RETURNING_TO_BASE":
-                self._log(
-                    f"[ARRIVAL] 🏠 Înapoi la bază! "
-                    f"world=({self.robot_x:.3f}, {self.robot_y:.3f})",
-                    "info"
-                )
+            if not self._nav_active:
+                if self._nav_succeeded:
+                    self._log(
+                        f"[ARRIVAL] 🏠 Înapoi la bază! "
+                        f"world=({self.robot_x:.3f}, {self.robot_y:.3f})", "info")
+                else:
+                    self._log("[NAV2] return esuat → IDLE oricum", "warn")
                 self.state    = "IDLE"
                 self.target_x = None
                 self.target_y = None
-            return
 
-        angle_to_target = math.atan2(dy, dx)
-        angle_error = angle_to_target - self.robot_yaw
-        while angle_error >  math.pi: angle_error -= 2 * math.pi
-        while angle_error < -math.pi: angle_error += 2 * math.pi
-
-        if abs(angle_error) > 1.0:
-            lin_speed = 0.0
-        else:
-            lin_speed = min(self.max_linear, self.k_lin * distance)
-            if abs(angle_error) > 0.3:
-                lin_speed *= 0.5
-
-        ang_speed = max(-self.max_angular, min(self.max_angular, self.k_ang * angle_error))
-
-        twist = Twist()
-        # Conventie standard ROS (dupa fix URDF + flip wheel axes):
-        #   linear.x  > 0 → forward, angular.z > 0 → CCW
-        # NU mai inversam (era hack pentru URDF original gresit)
-        twist.linear.x  = lin_speed
-        twist.angular.z = ang_speed
-        self.cmd_pub.publish(twist)
+    # Navigarea se face acum prin Nav2 (vezi _send_nav_goal / _on_goal_result).
+    # Controlul direct vechi (_navigate_to_target) a fost inlocuit: Nav2 publica
+    # viteza pe /cmd_vel_nav -> cmd_vel_inverter -> /cmd_vel_gz -> Gazebo.
 
     # ── Server communication ───────────────────────────────────────────
 
@@ -396,8 +430,14 @@ class DeliveryManager(Node):
     def _start_human_follower(self):
         try:
             self._log("[LAUNCHER] 🚀 Starting human_follower", "info")
+            # cmd_vel_topic:=/cmd_vel_nav → trece prin cmd_vel_inverter spre Gazebo
+            # (Nav2 e idle in FOLLOWING, deci /cmd_vel_nav e liber pt follower).
+            # use_sim_time:=true → ceas sincron cu Gazebo.
             self.human_follower_process = subprocess.Popen(
-                ["ros2", "run", "human_follower", "human_follower"],
+                ["ros2", "run", "human_follower", "human_follower",
+                 "--ros-args",
+                 "-p", "use_sim_time:=true",
+                 "-p", "cmd_vel_topic:=/cmd_vel_nav"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )

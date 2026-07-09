@@ -15,7 +15,9 @@
   <exec_depend>std_msgs</exec_depend>
 
   <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
 
   <!-- For YOLO camera pipeline -->
   <exec_depend>cv_bridge</exec_depend>
